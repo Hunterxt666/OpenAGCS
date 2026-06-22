@@ -1,0 +1,6 @@
+{
+    "apiBaseUrl": "http://sysuagcs.site/api/",
+    "amapKey": "YOUR_AMAP_KEY",
+    "photo_timeout": 500,
+    "timeout": 500
+}

@@ -1,0 +1,9 @@
+DBconfig:
+  host: 'MYSQL_HOST'
+  user: 'MYSQL_USER'
+  pw: 'MYSQL_PASSWORD'
+  port: 25100
+  db_name: 'MYSQL_DB_NAME'
+
+SerialConfig:
+  port: "/dev/ttypose"

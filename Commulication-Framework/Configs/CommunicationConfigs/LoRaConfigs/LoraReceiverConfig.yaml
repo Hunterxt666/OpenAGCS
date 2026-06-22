@@ -1,0 +1,11 @@
+LoraConfigs:
+  serial: "/dev/ttyAMA0"
+  freq: 433
+  addr: 0
+  power: 22
+  ari_speed: 2400
+
+rec_msg:
+  - "posData"
+
+rec_frequency: 5

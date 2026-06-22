@@ -1,0 +1,17 @@
+DBconfig:
+  host: 'MYSQL_HOST'
+  user: 'MYSQL_USER'
+  pw: 'MYSQL_PASSWORD'
+  port: 25100
+  db_name: 'MYSQL_DB_NAME'
+
+NTRIPConfig:
+  NTRIP_IP: "NTRIP_IP"   # Differential platform IP/port is usually fixed at 8002; update username and password.
+  NTRIP_PORT: 8002
+  NTRIP_USERNAME: "NTRIP_USERNAME"
+  NTRIP_PASSWORD: "NTRIP_PASSWORD"
+  NTRIP_MOUNT_POINT: "NTRIP_MOUNT_POINT" # Adjust based on the platform mount point; mobile typically uses RTCM33_GRCEJ.
+
+SerialConfig:
+  port: "/dev/ttygga"
+  rate: 460800

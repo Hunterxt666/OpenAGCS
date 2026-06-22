@@ -1,0 +1,13 @@
+uvicorn[all]
+fastapi
+datetime
+mysql-connector
+pyserial
+psutil
+requests
+pyyaml
+opencv-python
+geopy
+python-multipart
+pydantic
+redis

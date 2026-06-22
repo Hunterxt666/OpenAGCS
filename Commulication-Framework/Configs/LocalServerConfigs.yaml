@@ -1,0 +1,24 @@
+PhotoPath: './Photo'
+
+PreCleanPhoto: False
+
+Workers: 3
+
+MainUploadPath: "./run_upload.sh"
+
+StartWithScripts:
+  - "./Models/CommunicationModels/LoRaModels/LoraSender.py"
+  # -  Models/CommunicationModels/LoRaModels/LoraReceiver.py
+
+StartWithScriptsConfigs:
+  - "./Configs/CommunicationConfigs/LoRaConfigs/LoraSenderConfigs.yaml"
+  # - "./Configs/CommunicationConfigs/LoRaConfigs/LoraReceiverConfig.yaml"
+
+ShPath: "./RunPySHPath"
+
+LocalUrl: "http://127.0.0.1:26969"
+
+RedisInfo:
+  RedisPort: 6379
+  RedisIP: "127.0.0.1"
+  dbID: 0

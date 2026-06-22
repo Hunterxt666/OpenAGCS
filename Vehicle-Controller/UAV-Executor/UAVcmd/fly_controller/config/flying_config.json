@@ -1,0 +1,68 @@
+{
+  "rc_lost_action": {
+    "desc_cn": "Failsafe action",
+    "desc_en": "rc lost action",
+    "desc_range": "go_home/hover/landing",
+    "value": "hover"
+  },
+  "go_home_altitude": {
+    "desc_cn": "Return-to-home altitude",
+    "desc_en": "go home altitude",
+    "desc_range": "0 - 1500",
+    "value": 100
+  },
+  "flying_speed": {
+    "desc_cn": "Flight speed",
+    "desc_en": "flying speed",
+    "desc_range": "0 - 10",
+    "value": 10.0
+  },
+  "home_point_latitude": {
+    "desc_cn": "Home latitude",
+    "desc_en": "home point latitude",
+    "desc_range": "-90 - 90",
+    "value": 22.5425
+  },
+  "home_point_longitude": {
+    "desc_cn": "Home longitude",
+    "desc_en": "home point longitude",
+    "desc_range": "-180 - 180",
+    "value": 113.9575
+  },
+  "rtk_enable": {
+    "desc_cn": "RTK switch",
+    "desc_en": "RTK Enable",
+    "desc_range": "true/false",
+    "value": "false"
+  },
+  "HorizontalVisualObstacleAvoidanceEnable": {
+    "desc_cn": "Horizontal vision obstacle avoidance switch",
+    "desc_en": "Horizontal Visual Avoidance",
+    "desc_range": "true/false",
+    "value": "true"
+  },
+  "HorizontalRadarObstacleAvoidanceEnable": {
+    "desc_cn": "Horizontal ToF obstacle avoidance switch",
+    "desc_en": "Horizontal TOF Avoidance",
+    "desc_range": "true/false",
+    "value": "true"
+  },
+  "UpwardsVisualObstacleAvoidanceEnable": {
+    "desc_cn": "Upward vision obstacle avoidance switch",
+    "desc_en": "Upwards Visual Avoidance",
+    "desc_range": "true/false",
+    "value": "false"
+  },
+  "UpwardsRadarObstacleAvoidanceEnable": {
+    "desc_cn": "Upward ToF switch",
+    "desc_en": "Upwards TOF Avoidance",
+    "desc_range": "true/false",
+    "value": "false"
+  },
+  "DownwardsVisualObstacleAvoidanceEnable": {
+    "desc_cn": "Downward vision obstacle avoidance switch",
+    "desc_en": "Downwards Visual Avoidance",
+    "desc_range": "true/false",
+    "value": "true"
+  }
+}

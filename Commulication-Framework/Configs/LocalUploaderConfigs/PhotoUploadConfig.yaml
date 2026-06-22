@@ -1,0 +1,10 @@
+PhotoPath: './Photo'
+
+VideoPort: '/dev/usbcam'
+
+RedisInfo:
+  RedisPort: 6379
+  RedisIP: "127.0.0.1"
+  dbID: 1
+
+

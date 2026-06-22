@@ -1,0 +1,15 @@
+sh_path: "./RunPySHPath"
+scripts:
+  - "./Models/LocalUploaderModels/LocationUploader.py"
+  - "./Models/LocalUploaderModels/HeightUploader.py"
+  - "./Models/LocalUploaderModels/PhotoUploader.py"
+
+configs:
+  - "./Configs/LocalUploaderConfigs/LocationUploadConfig.yaml"
+  - "./Configs/LocalUploaderConfigs/HeightUploadConfig.yaml"
+  - "./Configs/LocalUploaderConfigs/PhotoUploadConfig.yaml"
+
+AgentType: "UAV"
+
+RemoteURL: "REMOTE_URL" # Update with the actual remote URL for uploading data; typically an API endpoint provided by the server.
+LocalURL: "http://127.0.0.1:26969"

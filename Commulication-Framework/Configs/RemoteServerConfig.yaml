@@ -1,0 +1,10 @@
+PhotoPath: './Photo'
+
+PreCleanPath: True
+
+RedisInfo:
+  RedisPort: 6379
+  RedisIP: "127.0.0.1"
+  dbID: 0
+
+Workers: 10
