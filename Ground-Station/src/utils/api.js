@@ -280,7 +280,7 @@ async function fetchUGVyaw() {
         );
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
         const data = await response.json();
-        return data.ugv_orientation || null;
+        return data.ugv_orientation ?? null;
     } catch (error) {
         console.error("Failed to fetch ugv new Orientation:", error);
         return null;
@@ -298,7 +298,7 @@ async function fetchUAVyaw() {
         );
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
         const data = await response.json();
-        return data.uav_orientation || null;
+        return data.uav_orientation ?? null;
     } catch (error) {
         console.error("Failed to fetch uav new Orientation:", error);
         return null;
@@ -315,7 +315,7 @@ async function fetchDistance() {
         );
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
         const data = await response.json();
-        return data.distance || null;
+        return data.distance ?? null;
     } catch (error) {
         console.error("Failed to fetch distance:", error);
         return null;
@@ -336,6 +336,23 @@ async function fetchSystemData() {
         return data || null;
     } catch (error) {
         console.error("Failed to fetch SystemData:", error);
+        return null;
+    }
+}
+
+async function fetchMissionState() {
+    try {
+        const response = await timeoutFetch(
+            `${api_config.apiBaseUrl}missionState`,
+            {method: 'GET'},
+            api_config.timeout
+        );
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        return await response.json();
+    } catch (error) {
+        console.error("Failed to fetch mission state:", error);
         return null;
     }
 }

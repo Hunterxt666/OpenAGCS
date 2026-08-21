@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.5)
-project(zhong_sir_m3e_ctrl CXX)
+project(uav_executor CXX)
 
 set(CMAKE_C_FLAGS "-pthread -std=gnu99")
 set(CMAKE_CXX_FLAGS "-std=c++11 -pthread")

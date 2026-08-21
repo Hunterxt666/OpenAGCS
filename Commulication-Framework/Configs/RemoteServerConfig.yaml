@@ -2,6 +2,9 @@ PhotoPath: './Photo'
 
 PreCleanPath: True
 
+Host: "0.0.0.0"
+Port: 26969
+
 RedisInfo:
   RedisPort: 6379
   RedisIP: "127.0.0.1"

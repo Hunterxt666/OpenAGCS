@@ -1,4 +1,5 @@
 import requests
+from urllib.parse import quote_plus
 from Tools.TimeUtils import transform_to_str
 import Tools.LogUtils as log
 
@@ -64,19 +65,33 @@ def send_clean_str(url):
     get(url, timeout=0.5)
 
 
-def send_pos(url, longitude, latitude, time, agent):
+def _mission_query(mission_id):
+    return (
+        ""
+        if mission_id is None
+        else f"&mission_id={quote_plus(str(mission_id))}"
+    )
+
+
+def send_pos(url, longitude, latitude, time, agent, mission_id=None):
     url = f"{url}/updatePos?latitude={latitude}&longitude={longitude}&time={transform_to_str(time)}&agent={agent}"
-    get(url, timeout=0.5)
+    url += _mission_query(mission_id)
+    response = get(url, timeout=0.5)
+    return response is not None and 200 <= response.status_code < 300
 
 
-def send_height(url, time, height, agent):
+def send_height(url, time, height, agent, mission_id=None):
     url = f"{url}/updateHeight?height={height}&time={transform_to_str(time)}&agent={agent}"
-    get(url, timeout=0.5)
+    url += _mission_query(mission_id)
+    response = get(url, timeout=0.5)
+    return response is not None and 200 <= response.status_code < 300
 
 
-def send_orientation(url, time, orientation, agent):
+def send_orientation(url, time, orientation, agent, mission_id=None):
     url = f"{url}/setOrientation?orientation={orientation}&time={transform_to_str(time)}&agent={agent}"
-    get(url, timeout=0.5)
+    url += _mission_query(mission_id)
+    response = get(url, timeout=0.5)
+    return response is not None and 200 <= response.status_code < 300
 
     
 def set_origin_pos(url):
@@ -108,6 +123,14 @@ def get_raw_msg(url, loc):
     return None
 
 
-def send_lora_data(url, data_type, data):
+def send_lora_data(url, data_type, data, received_at=None):
     url = f"{url}/setLoraData"
-    post(url, json={"data_type": data_type, "data": data}, timeout=1)
+    payload = {"data_type": data_type, "data": data}
+    if received_at is not None:
+        payload["received_at"] = float(received_at)
+    response = post(
+        url,
+        json=payload,
+        timeout=1,
+    )
+    return response is not None and 200 <= response.status_code < 300

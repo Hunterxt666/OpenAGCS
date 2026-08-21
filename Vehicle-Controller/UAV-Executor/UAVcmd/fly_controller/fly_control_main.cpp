@@ -1,6 +1,9 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include <termios.h>
+#include <atomic>
+#include <cstdint>
+#include <mutex>
 #include <string>
 #include "../dji_utils/util_misc.h"
 #include "../dji_utils/util_file.h"
@@ -11,7 +14,9 @@
 #include "dji_logger.h"
 #include "dji_fc_subscription.h"
 #include "cmath"
+#include "control_command_watchdog.h"
 #include "request_utils.h"
+#include "yaw_angle_utils.h"
 
 #ifdef OPEN_CV_INSTALLED
 
@@ -37,7 +42,7 @@ using namespace cv;
 #define SEQ_CHANGE_FREQUENCY                                             20.0
 #define SEQ_SPEED_CHANGE_PER_SECONDS                                     2.0
 #define SEQ_ANGEL_CHANGE_PER_SECONDS                                     30.0
-#define CHECK_EMERGENCY_FREQUENCY                                        0.5
+#define CHECK_EMERGENCY_FREQUENCY                                        5.0
 
 
 /* Private types -------------------------------------------------------------*/
@@ -54,10 +59,21 @@ static T_DjiFlightControllerHomeLocation s_homeLocation = {0};
 static T_DjiFcSubscriptionGpsPosition s_gpsPosition = {0};
 static bool isFirstUpdateConfig = false;
 
-static bool suspendCtrlSeqCommand = true;
-static bool suspendCtrlCmdCommand = true;
-static bool stopCtrlSeqCommand = true;
-static bool wait_yaw_to_publish = true;
+static std::atomic<bool> suspendCtrlSeqCommand(true);
+static std::atomic<bool> suspendCtrlCmdCommand(true);
+static std::atomic<bool> wait_yaw_to_publish(true);
+
+enum class StickControlMode {
+    Disabled,
+    AwaitingSequence,
+    Sequence,
+    Hover,
+};
+
+static std::mutex s_controlStateMutex;
+static StickControlMode s_stickControlMode = StickControlMode::Disabled;
+static bool s_hasControlSequence = false;
+static std::uint64_t s_lastControlSequenceReceivedAtMs = 0;
 
 static Control_seq cur_send_to_uav(0, 0, 0, 0, 0);
 
@@ -69,7 +85,7 @@ static T_DjiFcSubscriptionSingleBatteryInfo singleBatteryInfo2 = {0};
 static void *DjiUser_FlightControllerCommandFlyingTask(void *arg);
 static void *DjiUser_FlightControllerStatusDisplayTask(void *arg);
 static void DjiUser_ShowFlightStatusByOpenCV(void);
-static void DjiUser_FlightControllerVelocityAndYawRateCtrl(T_DjiFlightControllerJoystickCommand command);
+static void DjiUser_FlightControllerVelocityAndYawAngleCtrl(T_DjiFlightControllerJoystickCommand command);
 static int DjiUser_ScanKeyboardInput(void);
 static T_DjiReturnCode
 DjiUser_FlightCtrlJoystickCtrlAuthSwitchEventCb(T_DjiFlightControllerJoystickCtrlAuthorityEventInfo eventData);
@@ -125,30 +141,35 @@ dji_f32_t change_speed(double range, double step, dji_f32_t cur, double max_val)
     return cur;
 }
 
-double resolve_to_360(double now){
-    return now >= 360? now - 360 : now;
+// s_controlStateMutex must be held by callers of the following state helpers.
+static void ZeroVelocityStateLocked()
+{
+    s_flyingCommand.x = 0;
+    s_flyingCommand.y = 0;
+    s_flyingCommand.z = 0;
+    cur_send_to_uav.v_x = 0;
+    cur_send_to_uav.v_y = 0;
+    cur_send_to_uav.v_z = 0;
+    cur_send_to_uav.yaw = s_flyingCommand.yaw;
+    s_hasControlSequence = false;
 }
 
+static void DisableStickControlLocked()
+{
+    ZeroVelocityStateLocked();
+    s_stickControlMode = StickControlMode::Disabled;
+}
 
-dji_f32_t change_angel(double target, double step, dji_f32_t cur){
-    // target 179 cur 160 step 30
-    // target -10 cur 10 step 30
-    // target 170 cur 130 step 30
-    if (abs(target - cur) <= 0.01){
-        return cur;
-    }
-    target += 180; cur += 180;
-    if(target > cur && target <= cur + step){
-        cur = target;
-    }
-    else if(target < cur && target >= resolve_to_360(cur + step)){
-        cur = target;
-    }
-    else{
-        cur = resolve_to_360(cur + step);
-    }
-    USER_LOG_INFO("      【change_angel】cur -> %.2f target-> %.2f", cur - 180, target - 180);
-    return cur - 180;
+static void WaitForFreshSequenceLocked()
+{
+    ZeroVelocityStateLocked();
+    s_stickControlMode = StickControlMode::AwaitingSequence;
+}
+
+static void HoverLocked()
+{
+    ZeroVelocityStateLocked();
+    s_stickControlMode = StickControlMode::Hover;
 }
 
 // void check_depart_ok(void){
@@ -165,54 +186,59 @@ static void * ExcuteCmd(void* arg){
     double time = 0;
     T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();
     USER_LOG_INFO("      [Command Listener] started");
-    while(!suspendCtrlCmdCommand){
+    while(!suspendCtrlCmdCommand.load()){
         Control_cmd cmd = get_ctrl_cmd();
-        if(!cmd.is_empty && time != cmd.ctrl_time){
-            stopCtrlSeqCommand = true;
+        if(!cmd.is_empty && std::isfinite(cmd.ctrl_time) && time != cmd.ctrl_time){
             time = cmd.ctrl_time;
+            std::lock_guard<std::mutex> lock(s_controlStateMutex);
+            if(suspendCtrlCmdCommand.load()){
+                break;
+            }
             USER_LOG_INFO("      [Command Listener] preparing to execute %s", cmd.cmd.c_str());
             if(cmd.cmd == "TAKEOFF"){ // takeoff
+                DisableStickControlLocked();
                 DjiFlightController_ObtainJoystickCtrlAuthority();
                 DjiFlightController_StartTakeoff();
                 DjiFlightController_ObtainJoystickCtrlAuthority();
-                // Dji_set_stick();
-                // check_depart_ok();
+                WaitForFreshSequenceLocked();
             }
-            else if(cmd.cmd == "COFIRMLAND"){ // directly confirm landing
+            else if(cmd.cmd == "COFIRMLAND" || cmd.cmd == "CONFIRMLAND"){
+                // Disable stick execution before starting automatic landing. The
+                // shared lock prevents a concurrent joystick frame after this.
+                DisableStickControlLocked();
                 DjiFlightController_ObtainJoystickCtrlAuthority();
                 DjiFlightController_StartLanding();
                 DjiFlightController_StartConfirmLanding();
                 DjiFlightController_ReleaseJoystickCtrlAuthority();
             }
             else if(cmd.cmd == "LAND"){ // land; if under 0.7m check fails, confirmation is required
+                DisableStickControlLocked();
                 DjiFlightController_ObtainJoystickCtrlAuthority();
                 DjiFlightController_StartLanding();
                 DjiFlightController_ReleaseJoystickCtrlAuthority();
             }
             else if(cmd.cmd == "OFFCONTROL"){ // release control
+                DisableStickControlLocked();
                 DjiFlightController_ReleaseJoystickCtrlAuthority();
             }
             else if(cmd.cmd == "HOVER"){ // hover
+                HoverLocked();
                 DjiFlightController_ObtainJoystickCtrlAuthority();
-                s_flyingCommand.x=0;s_flyingCommand.y=0;s_flyingCommand.z=0;s_flyingCommand.yaw=s_flyingCommand.yaw;
-                cur_send_to_uav.v_x = 0;cur_send_to_uav.v_y = 0;cur_send_to_uav.v_z = 0; cur_send_to_uav.yaw = s_flyingCommand.yaw;
                 T_DjiFlightControllerJoystickCommand stop_seq = {0};
                 stop_seq.yaw = s_flyingCommand.yaw;
-                // Dji_set_stick();
-                DjiUser_FlightControllerVelocityAndYawRateCtrl(stop_seq);
-                DjiFlightController_ObtainJoystickCtrlAuthority();
-                // DjiFlightController_ReleaseJoystickCtrlAuthority();
+                DjiUser_FlightControllerVelocityAndYawAngleCtrl(stop_seq);
             }
             else if(cmd.cmd == "ARM"){ // arm
+                DisableStickControlLocked();
                 DjiFlightController_ObtainJoystickCtrlAuthority();
                 DjiFlightController_TurnOnMotors();
+                WaitForFreshSequenceLocked();
             }
             else if(cmd.cmd == "DISARM"){ // disarm
+                DisableStickControlLocked();
                 DjiFlightController_TurnOffMotors();
                 DjiFlightController_ReleaseJoystickCtrlAuthority();
             }
-            
-            stopCtrlSeqCommand = false;
             USER_LOG_INFO("      [Command Listener] executed %s", cmd.cmd.c_str());
         }
         osalHandler->TaskSleepMs(1000 / CMD_FREQUENCY);
@@ -224,15 +250,26 @@ static void * ExcuteCmd(void* arg){
 static void * SendSeq(void* arg){
     T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();
     USER_LOG_INFO("    [Control Sequence Listener] started");
-    while(!suspendCtrlSeqCommand){
+    while(!suspendCtrlSeqCommand.load()){
         Control_seq seq = get_ctrl_seq();
-        if(!seq.is_empty && cur_send_to_uav.ctrl_time != seq.ctrl_time){
-            cur_send_to_uav.v_x = get_arnge_speed(seq.v_x, MAX_X_SPEED);
-            cur_send_to_uav.v_y = get_arnge_speed(seq.v_y, MAX_Y_SPEED);
-            cur_send_to_uav.v_z = get_arnge_speed(seq.v_z, MAX_Z_SPEED);
-            cur_send_to_uav.yaw = get_arnge_speed(seq.yaw, MAX_ANGEL);
-            USER_LOG_INFO("      [Control Sequence Listener] replaced with %.2f,%.2f,%.2f,%.2f", cur_send_to_uav.v_x, cur_send_to_uav.v_y, cur_send_to_uav.v_z, cur_send_to_uav.yaw);
-            cur_send_to_uav.ctrl_time = seq.ctrl_time;
+        if(!seq.is_empty &&
+           std::isfinite(seq.v_x) && std::isfinite(seq.v_y) &&
+           std::isfinite(seq.v_z) && std::isfinite(seq.yaw) &&
+           std::isfinite(seq.ctrl_time)){
+            std::lock_guard<std::mutex> lock(s_controlStateMutex);
+            if(cur_send_to_uav.ctrl_time != seq.ctrl_time){
+                cur_send_to_uav.v_x = get_arnge_speed(seq.v_x, MAX_X_SPEED);
+                cur_send_to_uav.v_y = get_arnge_speed(seq.v_y, MAX_Y_SPEED);
+                cur_send_to_uav.v_z = get_arnge_speed(seq.v_z, MAX_Z_SPEED);
+                cur_send_to_uav.yaw = uav_executor::NormalizeYawAngle(seq.yaw);
+                USER_LOG_INFO("      [Control Sequence Listener] replaced with %.2f,%.2f,%.2f,%.2f", cur_send_to_uav.v_x, cur_send_to_uav.v_y, cur_send_to_uav.v_z, cur_send_to_uav.yaw);
+                cur_send_to_uav.ctrl_time = seq.ctrl_time;
+                s_lastControlSequenceReceivedAtMs = uav_executor::MonotonicTimeMs();
+                s_hasControlSequence = true;
+                if(s_stickControlMode != StickControlMode::Disabled){
+                    s_stickControlMode = StickControlMode::Sequence;
+                }
+            }
         }
         osalHandler->TaskSleepMs(1000 / SEQ_FREQUENCY);
     }
@@ -243,14 +280,24 @@ static void * SendSeq(void* arg){
 static void * ChangeSpeedSlowly(void* arg){
     T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();
     USER_LOG_INFO("    [Control Sequence Executor] started");
-    while(!suspendCtrlSeqCommand){
-        if(!stopCtrlSeqCommand){
-            Control_seq now_speed(cur_send_to_uav);
-            s_flyingCommand.x = change_speed(now_speed.v_x, speed_per_step, s_flyingCommand.x, MAX_X_SPEED);
-            s_flyingCommand.y = change_speed(now_speed.v_y, speed_per_step, s_flyingCommand.y, MAX_Y_SPEED);
-            s_flyingCommand.z = change_speed(now_speed.v_z, speed_per_step, s_flyingCommand.z, MAX_Z_SPEED);
-            s_flyingCommand.yaw = change_speed(now_speed.yaw, angel_per_step, s_flyingCommand.yaw, MAX_ANGEL);
-            USER_LOG_INFO("      [Control Sequence Executor] executing %.2f,%.2f,%.2f,%.2f", s_flyingCommand.x, s_flyingCommand.y, s_flyingCommand.z, s_flyingCommand.yaw);
+    while(!suspendCtrlSeqCommand.load()){
+        {
+            std::lock_guard<std::mutex> lock(s_controlStateMutex);
+            const bool sequenceIsFresh =
+                s_hasControlSequence &&
+                uav_executor::IsControlSequenceFresh(
+                    uav_executor::MonotonicTimeMs(),
+                    s_lastControlSequenceReceivedAtMs);
+            if(s_stickControlMode == StickControlMode::Sequence &&
+               sequenceIsFresh){
+                Control_seq now_speed(cur_send_to_uav);
+                s_flyingCommand.x = change_speed(now_speed.v_x, speed_per_step, s_flyingCommand.x, MAX_X_SPEED);
+                s_flyingCommand.y = change_speed(now_speed.v_y, speed_per_step, s_flyingCommand.y, MAX_Y_SPEED);
+                s_flyingCommand.z = change_speed(now_speed.v_z, speed_per_step, s_flyingCommand.z, MAX_Z_SPEED);
+                s_flyingCommand.yaw = uav_executor::StepYawAngle(
+                    s_flyingCommand.yaw, now_speed.yaw, angel_per_step);
+                USER_LOG_INFO("      [Control Sequence Executor] executing %.2f,%.2f,%.2f,%.2f", s_flyingCommand.x, s_flyingCommand.y, s_flyingCommand.z, s_flyingCommand.yaw);
+            }
         }
         osalHandler->TaskSleepMs(1000 / SEQ_CHANGE_FREQUENCY);
     }
@@ -261,16 +308,23 @@ static void * ChangeSpeedSlowly(void* arg){
 static void * EmergencyReturnHome(void* arg){
     T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();
     USER_LOG_INFO("    [Emergency Detector] started");
-    while(!suspendCtrlCmdCommand && !suspendCtrlSeqCommand){
+    while(!suspendCtrlCmdCommand.load() && !suspendCtrlSeqCommand.load()){
         USER_LOG_INFO("      [Emergency Detector] checking");
         if(get_emergency()){
-            suspendCtrlCmdCommand = true; suspendCtrlSeqCommand = true;
+            std::lock_guard<std::mutex> lock(s_controlStateMutex);
+            suspendCtrlCmdCommand.store(true);
+            suspendCtrlSeqCommand.store(true);
             USER_LOG_INFO("      [Emergency Detector] emergency detected, preparing to interrupt");
-            DjiFlightController_ObtainJoystickCtrlAuthority();
-            T_DjiFlightControllerJoystickCommand stop_seq = {0};
-            stop_seq.yaw = s_flyingCommand.yaw;
-            DjiUser_FlightControllerVelocityAndYawRateCtrl(stop_seq);
-            DjiFlightController_ReleaseJoystickCtrlAuthority();
+            const bool stickControlWasActive =
+                s_stickControlMode != StickControlMode::Disabled;
+            DisableStickControlLocked();
+            if(stickControlWasActive){
+                DjiFlightController_ObtainJoystickCtrlAuthority();
+                T_DjiFlightControllerJoystickCommand stop_seq = {0};
+                stop_seq.yaw = s_flyingCommand.yaw;
+                DjiUser_FlightControllerVelocityAndYawAngleCtrl(stop_seq);
+                DjiFlightController_ReleaseJoystickCtrlAuthority();
+            }
             USER_LOG_INFO("      [Emergency Detector] interrupt started, calling emergency stop");
         }
         osalHandler->TaskSleepMs(1000 / CHECK_EMERGENCY_FREQUENCY);
@@ -282,11 +336,11 @@ static void * EmergencyReturnHome(void* arg){
 static void * get_yaw_from_dji(void* arg){
     T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();
     USER_LOG_INFO("    [DJI Yaw Publisher] started");
-    while(wait_yaw_to_publish){
+    while(wait_yaw_to_publish.load()){
         USER_LOG_INFO("      [DJI Yaw Publisher] waiting loop started");
         osalHandler->TaskSleepMs(1000);
     }
-    while(!suspendCtrlCmdCommand){
+    while(!suspendCtrlCmdCommand.load()){
         T_DjiFcSubscriptionQuaternion quaternionData;
         T_DjiDataTimestamp timestamp;
         DjiFcSubscription_GetLatestValueOfTopic(DJI_FC_SUBSCRIPTION_TOPIC_QUATERNION, 
@@ -310,9 +364,13 @@ void MainFlyControlLoop(void)
     OriginPosition original_pos = get_original_pos();
     T_DjiReturnCode returnCode;
     T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();
-    
-    suspendCtrlSeqCommand = false;
-    suspendCtrlCmdCommand = false;
+
+    {
+        std::lock_guard<std::mutex> lock(s_controlStateMutex);
+        DisableStickControlLocked();
+    }
+    suspendCtrlSeqCommand.store(false);
+    suspendCtrlCmdCommand.store(false);
 
     returnCode = osalHandler->TaskCreate("command_flying_task", DjiUser_FlightControllerCommandFlyingTask,
                                          DJI_TEST_COMMAND_FLYING_TASK_STACK_SIZE, (void *) & original_pos,
@@ -347,7 +405,7 @@ void MainFlyControlLoop(void)
                             DJI_TEST_COMMAND_FLYING_TASK_STACK_SIZE, nullptr,
                             &s_commandFlyingTaskHandle);
     USER_LOG_INFO("    [Flight Control] yaw-listener thread started");
-    while(!suspendCtrlCmdCommand && !suspendCtrlSeqCommand){
+    while(!suspendCtrlCmdCommand.load() && !suspendCtrlSeqCommand.load()){
         osalHandler -> TaskSleepMs(5000);
         USER_LOG_INFO("  [Flight Control Main] heartbeat..");
     }
@@ -413,7 +471,7 @@ static void * DjiUser_FlightControllerCommandFlyingTask(void *arg)
         USER_LOG_ERROR("Subscribe topic altitude failed, error code:0x%08llX", returnCode);
         return NULL;
     }
-    wait_yaw_to_publish = false;
+    wait_yaw_to_publish.store(false);
 
     /* Indicates the source of the current control device (RC/mobile/third-party, etc.). */
     returnCode = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_CONTROL_DEVICE, DJI_DATA_SUBSCRIPTION_TOPIC_5_HZ, NULL);
@@ -444,24 +502,37 @@ static void * DjiUser_FlightControllerCommandFlyingTask(void *arg)
     }
     // Dji_set_stick();
     // Flight-control loop
-    static T_DjiFlightControllerJoystickCommand pre_fly_cmd = {0};
-    DjiFlightController_ObtainJoystickCtrlAuthority();
-    while (!suspendCtrlSeqCommand) {
-        if(!stopCtrlSeqCommand){
-            DjiUser_FlightControllerVelocityAndYawRateCtrl(s_flyingCommand);
-            pre_fly_cmd.x = s_flyingCommand.x; pre_fly_cmd.y = s_flyingCommand.y;
-            pre_fly_cmd.z = s_flyingCommand.z; pre_fly_cmd.yaw = s_flyingCommand.yaw;
-            osalHandler->TaskSleepMs(1000 / DJI_TEST_COMMAND_FLYING_CTRL_FREQ);
+    while (!suspendCtrlSeqCommand.load()) {
+        {
+            std::lock_guard<std::mutex> lock(s_controlStateMutex);
+            if(s_stickControlMode == StickControlMode::Sequence){
+                const bool sequenceIsFresh =
+                    s_hasControlSequence &&
+                    uav_executor::IsControlSequenceFresh(
+                        uav_executor::MonotonicTimeMs(),
+                        s_lastControlSequenceReceivedAtMs);
+                if(!sequenceIsFresh){
+                    HoverLocked();
+                    USER_LOG_ERROR(
+                        "    [Flight Control] control sequence expired after %llu ms; hovering",
+                        static_cast<unsigned long long>(
+                            uav_executor::kControlSequenceTtlMs));
+                }
+            }
+
+            if(s_stickControlMode == StickControlMode::Sequence ||
+               s_stickControlMode == StickControlMode::Hover){
+                DjiUser_FlightControllerVelocityAndYawAngleCtrl(s_flyingCommand);
+            }
         }
-        // && !( pre_fly_cmd.x == s_flyingCommand.x && pre_fly_cmd.y == s_flyingCommand.y &&
-        //     pre_fly_cmd.z == s_flyingCommand.z && pre_fly_cmd.yaw == s_flyingCommand.yaw)
+        osalHandler->TaskSleepMs(1000 / DJI_TEST_COMMAND_FLYING_CTRL_FREQ);
     }
     USER_LOG_INFO("    [Flight Control] stick-control thread exited");
     return nullptr;
 }
 
 
-static void DjiUser_FlightControllerVelocityAndYawRateCtrl(T_DjiFlightControllerJoystickCommand command)
+static void DjiUser_FlightControllerVelocityAndYawAngleCtrl(T_DjiFlightControllerJoystickCommand command)
 {
     // T_DjiFlightControllerJoystickMode joystickMode = {
     //     DJI_FLIGHT_CONTROLLER_HORIZONTAL_VELOCITY_CONTROL_MODE, // Control mode for horizontal velocity (±30m/s)
@@ -481,7 +552,6 @@ static void DjiUser_FlightControllerVelocityAndYawRateCtrl(T_DjiFlightController
     returnCode = DjiFlightController_ExecuteJoystickAction(command);
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("        [DJI Joystick Executor failed]Execute joystick command failed, errno = 0x%08llX", returnCode);
-        DjiFlightController_ObtainJoystickCtrlAuthority();
         return;
     }
     USER_LOG_DEBUG("        [DJI Joystick Executor success] %.2f %.2f %.2f %.2f", command.x, command.y, command.z, command.yaw);

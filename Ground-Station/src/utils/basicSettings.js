@@ -1,6 +1,45 @@
 // Mission-control handlers for origin setup, tracking, takeoff, and return.
 let has_init = false, has_depart = false, trackingInterval = null, videoInterval = null;
+let mission_transition_pending = false;
 let api_timeout = 300, video_timeout = 500;
+
+function applyMissionState(state) {
+    if (!state || !state.phase) {
+        return;
+    }
+    has_depart = state.airborne === true;
+    const phaseSpan = document.getElementById("mission-phase");
+    if (phaseSpan) {
+        const source = state.active_source ? ` / ${state.active_source}` : "";
+        phaseSpan.innerText = `${state.phase}${source}`;
+    }
+}
+
+async function waitForMissionPhase(successPhase, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const state = await fetchMissionState();
+        if (state) {
+            applyMissionState(state);
+            if (state.phase === successPhase || state.phase === "FAULT") {
+                return state;
+            }
+        }
+        await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    return null;
+}
+
+function setMissionButtonsDisabled(disabled) {
+    const takeoffButton = document.getElementById("takeoff-button");
+    const landButton = document.getElementById("land-button");
+    if (takeoffButton) {
+        takeoffButton.disabled = disabled;
+    }
+    if (landButton) {
+        landButton.disabled = disabled;
+    }
+}
 
 async function init_display(){
     const center = await fetchCenter();
@@ -110,16 +149,29 @@ async function stop_display(){
 
 
 async function setDepart(){
+    if (mission_transition_pending) {
+        return;
+    }
     if(has_init){
         if (! has_depart){
-           const flag = await fetchDepart();
-           if(flag){
-                has_depart = true;
-                alert('Takeoff succeeded 😀'); 
-           }
-           else{
+            mission_transition_pending = true;
+            setMissionButtonsDisabled(true);
+            const flag = await fetchDepart();
+            if(!flag){
                 alert('Takeoff failed 🤯');
-           }
+            } else {
+                alert('Takeoff request accepted');
+                const state = await waitForMissionPhase("ESCORT", 240000);
+                if (state && state.phase === "ESCORT") {
+                    alert('Takeoff and positioning succeeded');
+                } else if (state && state.phase === "FAULT") {
+                    alert('Takeoff stopped in fault state');
+                } else {
+                    alert('Takeoff confirmation timed out');
+                }
+            }
+            mission_transition_pending = false;
+            setMissionButtonsDisabled(false);
         }
         else{
             alert("Already airborne 👻");
@@ -131,16 +183,29 @@ async function setDepart(){
 }
 
 async function setLand(){
+    if (mission_transition_pending) {
+        return;
+    }
     if(has_init){
         if (has_depart){
-           const flag = await fetchLand();
-           if(flag){
-                has_depart = false;
-                alert('Landing succeeded 😀'); 
-           }
-           else{
+            mission_transition_pending = true;
+            setMissionButtonsDisabled(true);
+            const flag = await fetchLand();
+            if(!flag){
                 alert('Landing failed 🤯');
-           }
+            } else {
+                alert('Landing request accepted');
+                const state = await waitForMissionPhase("IDLE", 300000);
+                if (state && state.phase === "IDLE" && !state.airborne) {
+                    alert('Landing succeeded');
+                } else if (state && state.phase === "FAULT") {
+                    alert('Landing stopped in fault state');
+                } else {
+                    alert('Landing confirmation timed out');
+                }
+            }
+            mission_transition_pending = false;
+            setMissionButtonsDisabled(false);
         }
         else{
             alert("Returning 👻");

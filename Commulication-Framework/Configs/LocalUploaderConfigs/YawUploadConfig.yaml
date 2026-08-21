@@ -7,3 +7,13 @@ DBconfig:
 
 SerialConfig:
   port: "/dev/ttypose"
+
+# Algorithm 1 parameters from the paper. Angular thresholds are in radians;
+# process and measurement variances are in rad^2.
+HeadingFilter:
+  process_variance: 0.03
+  measurement_variance: 0.002742
+  lower_threshold: 0.6108652381980153  # 35 deg
+  upper_threshold: 2.443460952792061   # 140 deg
+  covariance_inflation: 10.0
+  initial_covariance: 1.0

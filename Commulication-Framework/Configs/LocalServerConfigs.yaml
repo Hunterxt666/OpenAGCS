@@ -2,17 +2,20 @@ PhotoPath: './Photo'
 
 PreCleanPhoto: False
 
-Workers: 3
+# Upload subprocess ownership is process-local, so the onboard API uses one
+# worker to keep /startUpload and /endUpload on the same process.
+Workers: 1
 
 MainUploadPath: "./run_upload.sh"
+MainUploadConfig: "./Configs/UploadMainConfig.yaml"
+ProcessStartupGraceSeconds: 2.0
 
 StartWithScripts:
-  - "./Models/CommunicationModels/LoRaModels/LoraSender.py"
-  # -  Models/CommunicationModels/LoRaModels/LoraReceiver.py
+  # UAV receives the GV position fallback stream over LoRa.
+  - "./Models/CommunicationModels/LoRaModels/LoraReceiver.py"
 
 StartWithScriptsConfigs:
-  - "./Configs/CommunicationConfigs/LoRaConfigs/LoraSenderConfigs.yaml"
-  # - "./Configs/CommunicationConfigs/LoRaConfigs/LoraReceiverConfig.yaml"
+  - "./Configs/CommunicationConfigs/LoRaConfigs/LoraReceiverConfig.yaml"
 
 ShPath: "./RunPySHPath"
 

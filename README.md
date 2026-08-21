@@ -1,123 +1,178 @@
 <div align="center">
 <h1>Real-Time Air-Ground Cooperative Control with Onboard UAV Computation and Dual-Mode Communication</h1>
+
+Jingjun Tan<sup>&dagger;</sup>, Qien Chen<sup>&dagger;</sup>, Binhan Sun,
+Shimin Wang, Hengxing Cai, and Renxin Zhong<sup>*</sup>
+
+Guangdong Provincial Key Laboratory of Intelligent Transportation Systems,
+School of Intelligent Systems Engineering, Sun Yat-sen University, Shenzhen,
+China
+
+School of Data Science, Lingnan University, Tuen Mun, Hong Kong
+
+<sup>&dagger;</sup>Equal contribution.
+<sup>*</sup>Corresponding author: `zhrenxin@mail.sysu.edu.cn`
 </div>
 
-<div align="center">
+## Artifact Scope
 
-Jingjun Tan†, Qien Chen†, Binhan Sun, Shimin Wang, Hengxing Cai, Renxin Zhong*
+OpenAGCS is the implementation and reproducibility artifact accompanying the
+paper above. It contains the experiment-relevant sensing, dual-mode
+communication, UAV supervision and control, operator interface, and offline
+analysis code.
 
-**Guangdong Provincial Key Laboratory of Intelligent Transportation Systems, School of Intelligent Systems Engineering, Sun Yat-sen University, Shenzhen 518107, China**  
-**School of Data Science, Lingnan University, Tuen Mun, Hong Kong**
+The repository supports two distinct workflows:
 
-† J. Tan and Q. Chen contributed equally to this work.  
-\* Corresponding author: Renxin Zhong (`zhrenxin@mail.sysu.edu.cn`)
+1. **Paper-result reproduction:** runs offline from the released CSV inputs and
+   does not require flight hardware, Redis, MySQL, LoRa, or DJI PSDK.
+2. **Distributed system deployment:** runs the communication and control
+   modules on the remote server, GV computer, UAV computer, and operator
+   workstation.
 
-</div>
+## Architecture
 
-## Overview
+![System architecture](Docs/Figure/system-architecture.png)
 
-This repository `OpenAGCS` is the open-source artifact for the paper above. It implements a real-time air-ground cooperative stack in which:
+| Layer | Module | Experiment-relevant responsibility |
+| --- | --- | --- |
+| Interaction | [`Ground-Station`](Ground-Station/README.md) | Mission parameters, operator commands, confirmed mission state, and trajectory visualization |
+| Communication | [`Commulication-Framework`](Commulication-Framework/README.md) | Local/remote APIs, timestamped telemetry, adaptive heading filtering, cellular state, and LoRa transport |
+| Control | [`Vehicle-Controller`](Vehicle-Controller/README.md) | Dual-mode state supervision, safety state machine, Eq. (11) PD control, and absolute-yaw command generation |
+| Execution | [`UAV-Executor`](Vehicle-Controller/UAV-Executor/README.md) | DJI ground-frame command execution, command watchdog, emergency latch, and shortest-path absolute yaw |
+| Evaluation | [`Experiment-Analysis`](Experiment-Analysis/README.md) | Tracking, communication, heading, and platoon analysis with Tables I--IV and VII and Figures 5--13 |
 
-- the `Ground-Station` provides operator-facing mission monitoring and control,
-- the `Commulication-Framework` bridges 4G and LoRa communication paths while synchronizing shared state,
-- the `Vehicle-Controller` runs onboard UAV follow-control logic close to the execution side.
+The historical directory spelling `Commulication-Framework` is retained so
+that existing deployment scripts and source references remain valid.
 
-The design goal is to keep perception feedback, cross-layer state synchronization, and mission control tightly coupled while preserving modular deployment across edge and remote nodes.
+## Requirements
+
+| Workflow | Minimum requirements |
+| --- | --- |
+| Offline paper reproduction | Conda, Python 3.9 environment, approximately 2 GB free disk space |
+| Ground Station | Conda, network access to the remote API, AMap Web JavaScript API key |
+| Communication Framework | Linux recommended, Conda, Redis, optional MySQL, synchronized clocks, configured sensor/LoRa devices |
+| Vehicle Controller | UAV Linux computer, Conda, reachable local and remote communication APIs |
+| UAV Executor | Authorized DJI PSDK 3.9.1, supported Linux target, native compiler and libraries, aircraft credentials |
+
+Internet access is needed only to install dependencies and, for the Ground
+Station, to load the configured map service. The experiment analysis itself is
+offline after the environment and repository are available.
+
+## Quick Start: Reproduce The Paper Results
+
+This is the recommended first check of the public artifact. Run the commands
+from the repository root.
+
+### 1. Create the Conda environment
+
+```bash
+cd Experiment-Analysis
+conda create --name agcs-analysis python=3.9 pip -y
+conda activate agcs-analysis
+python -m pip install -r requirements.txt
+```
+
+### 2. Reproduce all tables and figures
+
+```bash
+python -m agcs_analysis all --clean
+```
+
+Generated artifacts are written to:
+
+- `Experiment-Analysis/output/tables/`
+- `Experiment-Analysis/output/figures/`
+- `Experiment-Analysis/output/intermediate/`
+- `Experiment-Analysis/output/analysis_summary.json`
+
+Use `python -m agcs_analysis all --clean --tables-only` when figure rendering is not
+required.
+
+## Quick Start: Distributed Deployment
+
+The runtime stack is distributed. Do not run the UAV and GV local services
+against the same Redis database.
+
+Each runtime component uses an independent Conda environment:
+
+| Module | Conda environment | Setup guide |
+| --- | --- | --- |
+| Communication Framework | `agcs-communication` | [Quick Start](Commulication-Framework/README.md#quick-start) |
+| Vehicle Controller | `agcs-controller` | [Quick Start](Vehicle-Controller/README.md#quick-start) |
+| Ground Station | `agcs-ground-station` | [Quick Start](Ground-Station/README.md#quick-start) |
+| Experiment Analysis | `agcs-analysis` | [Quick Reproduction](Experiment-Analysis/README.md#quick-reproduction) |
+| UAV Executor | `agcs-executor` | [Reproducible Deployment](Vehicle-Controller/UAV-Executor/README.md#reproducible-deployment) |
+
+After installing and configuring the modules, start them in this order:
+
+1. remote Communication Framework;
+2. GV local Communication Framework and LoRa sender;
+3. UAV local Communication Framework and LoRa receiver;
+4. authorized DJI UAV Executor;
+5. UAV Vehicle Controller;
+6. Ground Station.
+
+The module READMEs identify the required machine, configuration files, launch
+command, and health check for each process.
+
+## Released Data And Reproducibility
+
+The public experiment artifact contains the controller, UAV, and trial-labelled
+RTK trajectory CSV inputs required by the reproduction pipeline.
+The original application logs are retained outside the public repository
+because they are high-volume and dominated by repeated diagnostic and transport
+records. `Experiment-Analysis/extract_data.py` documents the deterministic
+log-to-CSV extraction used for the released data.
+
+For Table III, the released controller CSVs preserve the same UGV state records
+and timestamp field used in the paper's original calculation. The reproduction
+therefore uses the same data basis and interval calculation as the paper.
+
+The analysis pipeline records all input mappings and numerical parameters in
+`Experiment-Analysis/manifest.json`. It exposes reconstructed timestamps,
+causal alignments, communication modes, response fits, filter outputs, and
+plotting series under `output/intermediate/`.
+
+Table I speed statistics are reproduced from
+`Experiment-Analysis/data/heading/*.csv` using centered linear
+interpolation at 1.0 s before and after each valid sample. The resulting planar
+displacement is divided by 2.0 s and converted to km/h before computing the
+mean and P95.
+
+The analysis project provides three independently runnable features:
+
+- `tracking`: Tables I--II, auxiliary response/delay tables, and Figures 5--8;
+- `communication`: Table III and Figures 9--11;
+- `heading`: RTK-course-referenced Table IV and Figure 12.
+
+See the [Experiment Analysis project guide](Experiment-Analysis/README.md) for
+the feature commands, data contracts, output layout, and numerical methods.
+
+## Availability Boundaries
+
+- The GV was manually driven in the reported experiments. No autonomous UGV
+  motion controller was used to generate the reported results.
+- The DJI executor overlay source is public. DJI PSDK, aircraft-specific
+  credentials, and the linked executable are not redistributed because they
+  require separate DJI authorization and platform-specific deployment.
+- Table IV evaluates raw GV yaw and every filter output against an independent
+  RTK-derived course angle during valid moving segments. The reference and
+  metrics use only `Experiment-Analysis/data/heading/*.csv`.
+- Figure 5 is reproduced offline without the network-fetched Esri basemap used
+  as a background in the archived visualization.
 
 ## Demo
 
 <p align="center">
-  <img src="Docs/GIF/demo.gif" alt="System demo" style="max-width: 100%;">
+  <img src="Docs/GIF/demo.gif" alt="OpenAGCS system demonstration" style="max-width: 100%;">
 </p>
 
-[Original Demo Video](https://youtu.be/gD_MNeUHup0)
-
-## System Architecture
-
-![System architecture](Docs/Figure/system-architecture.png)
-
-The implementation follows the same three-layer decomposition used in the paper:
-
-| Layer | Module | Role in the system |
-| --- | --- | --- |
-| Interaction layer | `Ground-Station` | Displays UAV/UGV state, media, trajectories, and exposes mission actions to the operator |
-| Middleware layer | `Commulication-Framework` | Synchronizes telemetry, bridges local/remote APIs, and coordinates 4G + LoRa communication |
-| Control layer | `Vehicle-Controller` | Converts mission intent into onboard UAV follow, return, and landing actions |
-
-## Repository Structure
-
-- [Ground-Station](Ground-Station/README.md): visualization panels, map interaction, operator commands
-- [Commulication-Framework](Commulication-Framework/README.md): local/remote FastAPI services, state relay, media and telemetry transport
-- [Vehicle-Controller](Vehicle-Controller/README.md): onboard UAV mission loop and follow-control logic
-
-## Paper-to-Code Mapping
-
-### 1. Human-in-the-loop interaction
-
-`Ground-Station` implements the top-level interface used to:
-
-- initialize the mission origin,
-- display UAV and UGV trajectories in real time,
-- issue takeoff, return, landing, and parameter-setting actions,
-- review live image feedback synchronized by the backend.
-
-### 2. Dual-mode communication and state synchronization
-
-`Commulication-Framework` contains the communication logic described in the paper:
-
-- `local_backend_api.py` serves the edge-side API used by onboard processes,
-- `remote_backend_api.py` aggregates UAV/UGV data for remote querying and supervision,
-- Redis is used for low-latency runtime state,
-- MySQL is used for persistent storage and traceable history,
-- the local/remote split allows the system to combine 4G uplink with LoRa-side local exchange.
-
-### 3. Onboard cooperative control
-
-`Vehicle-Controller` holds the mission-side UAV control logic:
-
-- `uav_main.py` keeps the controller alive and switches between idle, follow, and return states,
-- `VehicleAgent/DroneAgent.py` maintains the state cache and generates velocity/yaw commands,
-- `UAV-Executor` consumes the generated commands on the execution side.
-
-## Data and Control Flow
-
-The end-to-end runtime loop is:
-
-1. `Ground-Station` requests origin initialization and mission actions.
-2. `Commulication-Framework` stores and relays UAV/UGV state across local and remote services.
-3. `Vehicle-Controller` reads shared state and computes follow-control commands onboard.
-4. `UAV-Executor` executes the control stream and feeds state back into the middleware.
-5. The operator observes the updated trajectory, altitude, orientation, and image feedback in `Ground-Station`.
-
-## Quick Start
-
-Use each module's setup guide for environment-specific installation:
-
-- [Ground-Station Quick Start](Ground-Station/README.md)
-- [Commulication-Framework Quick Start](Commulication-Framework/README.md)
-- [Vehicle-Controller Quick Start](Vehicle-Controller/README.md)
-
-For integrated reproduction, start services in the following order:
-
-1. `Commulication-Framework`
-2. `Vehicle-Controller`
-3. `Ground-Station`
-
-This order ensures the shared communication endpoints are available before the controller and UI connect.
-
-## Reproducibility Notes
-
-- Keep backend endpoint configuration consistent across all three modules.
-- Verify Redis, MySQL, and any network-facing endpoints before starting experiments.
-- Use the same origin definition for controller and visualization runs.
-- Preserve logs and uploaded media when reproducing paper experiments.
+[Demonstration video](https://youtu.be/gD_MNeUHup0)
 
 ## Citation
 
-If you use this artifact in research, please cite:
-
 ```bibtex
-@article{iot64019_2026,
+@article{
   title   = {Real-Time Air--Ground Cooperative Control with Onboard UAV Computation and Dual-Mode Communication},
   author  = {Tan, Jingjun and Chen, Qien and Sun, Binhan and Wang, Shimin and Cai, Hengxing and Zhong, Renxin},
   year    = {2026}
@@ -126,4 +181,4 @@ If you use this artifact in research, please cite:
 
 ## License
 
-See the `LICENSE` file for the license terms of this repository.
+See [`LICENSE`](LICENSE) for the repository license.

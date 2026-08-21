@@ -104,18 +104,55 @@ def upload_photo_data(table_name, path, sql_config):
 
 
 class RedisDict:
+    _SET_MANY_IF_SCRIPT = """
+    if redis.call('GET', KEYS[1]) ~= ARGV[1] then
+        return 0
+    end
+    for index = 2, #KEYS do
+        redis.call('SET', KEYS[index], ARGV[index])
+    end
+    return 1
+    """
+    _SET_MANY_IF_NEWER_SCRIPT = """
+    local current = redis.call('GET', KEYS[1])
+    local candidate = ARGV[1]
+    if current == candidate then
+        return 1
+    end
+    if current and current ~= 'null' then
+        if not string.match(current, '^%d+$')
+            or not string.match(candidate, '^%d+$') then
+            return 0
+        end
+        if string.len(candidate) < string.len(current)
+            or (
+                string.len(candidate) == string.len(current)
+                and candidate < current
+            ) then
+            return 0
+        end
+    end
+    redis.call('SET', KEYS[1], candidate)
+    for index = 2, #KEYS do
+        redis.call('SET', KEYS[index], ARGV[index])
+    end
+    return 1
+    """
+
     def __init__(self, host="localhost", port=6379, db=0):
         """Initialize Redis client."""
         self.redis_client = redis.StrictRedis(host=host, port=port, db=db, decode_responses=True)
 
-    def _get_key(self, key: str) -> any:
-        """Get a key from Redis and handle serialized values."""
-        value = self.redis_client.get(key)
+    @staticmethod
+    def _decode_value(value):
+        """Decode one Redis value using the mapping's existing conventions."""
         if value == "true":
             return True
         elif value == "false":
             return False
         elif value == "null" or value == "":
+            return None
+        elif value is None:
             return None
         try:
             # Try to convert string to float or int
@@ -131,15 +168,24 @@ class RedisDict:
         except Exception:
             return value  # If JSON parse fails, return raw string
 
+    @staticmethod
+    def _encode_value(value):
+        """Encode one value using the mapping's existing conventions."""
+        if isinstance(value, (dict, list)):
+            return json.dumps(value)
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if value is None:
+            return "null"
+        return value
+
+    def _get_key(self, key: str) -> any:
+        """Get a key from Redis and handle serialized values."""
+        return self._decode_value(self.redis_client.get(key))
+
     def _set_key(self, key: str, value: any) -> None:
         """Set a key/value in Redis and handle serialized values."""
-        if isinstance(value, (dict, list)):
-            value = json.dumps(value)  # Serialize dict/list to JSON
-        elif isinstance(value, bool):  # Special handling for bool
-            value = "true" if value else "false"
-        elif value is None:
-            value = "null"
-        self.redis_client.set(key, value)
+        self.redis_client.set(key, self._encode_value(value))
 
     def __getitem__(self, key: str) -> any:
         """Get a value from Redis (dict-style)."""
@@ -164,6 +210,60 @@ class RedisDict:
         """Get a value; return default if missing."""
         return self._get_key(key) or default
 
+    def get_many(self, keys):
+        """Atomically read and decode several keys with one Redis MGET."""
+        values = self.redis_client.mget(keys)
+        return {
+            key: self._decode_value(value)
+            for key, value in zip(keys, values)
+        }
+
+    def set_many(self, data):
+        """Commit related key/value updates in one Redis transaction."""
+        if not data:
+            return
+        pipeline = self.redis_client.pipeline(transaction=True)
+        for key, value in data.items():
+            pipeline.set(key, self._encode_value(value))
+        pipeline.execute()
+
+    def set_many_if(self, condition_key, expected_value, data):
+        """Commit updates only while a Redis value matches the expectation."""
+        if not data:
+            return True
+        keys = [condition_key, *data.keys()]
+        arguments = [
+            self._encode_value(expected_value),
+            *(self._encode_value(value) for value in data.values()),
+        ]
+        result = self.redis_client.eval(
+            self._SET_MANY_IF_SCRIPT,
+            len(keys),
+            *keys,
+            *arguments,
+        )
+        return bool(result)
+
+    def set_many_if_newer(self, condition_key, new_value, data):
+        """Commit a numeric epoch and its reset only if it cannot regress."""
+        if condition_key not in data:
+            raise ValueError("conditional epoch key must be part of data")
+        keys = [condition_key, *(
+            key for key in data if key != condition_key
+        )]
+        ordered_values = [data[key] for key in keys]
+        arguments = [
+            self._encode_value(new_value),
+            *(self._encode_value(value) for value in ordered_values[1:]),
+        ]
+        result = self.redis_client.eval(
+            self._SET_MANY_IF_NEWER_SCRIPT,
+            len(keys),
+            *keys,
+            *arguments,
+        )
+        return bool(result)
+
     def keys(self):
         """Get all Redis keys."""
         return self.redis_client.keys()
@@ -177,8 +277,7 @@ class RedisDict:
 
     def init_keys(self, data: dict):
         """Initialize multiple Redis keys."""
-        for key, val in data.items():
-            self._set_key(key, val)
+        self.set_many(data)
 
     def __repr__(self):
         """Provide a dict-like string representation."""

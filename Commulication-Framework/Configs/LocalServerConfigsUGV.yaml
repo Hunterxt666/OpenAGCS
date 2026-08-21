@@ -1,0 +1,27 @@
+PhotoPath: './Photo'
+
+PreCleanPhoto: False
+
+# Upload subprocess ownership is process-local, so the onboard API uses one
+# worker to keep /startUpload and /endUpload on the same process.
+Workers: 1
+
+MainUploadPath: "./run_upload.sh"
+MainUploadConfig: "./Configs/UploadMainConfigUGV.yaml"
+ProcessStartupGraceSeconds: 2.0
+
+StartWithScripts:
+  # UGV publishes its state as the LoRa fallback stream consumed by the UAV.
+  - "./Models/CommunicationModels/LoRaModels/LoraSender.py"
+
+StartWithScriptsConfigs:
+  - "./Configs/CommunicationConfigs/LoRaConfigs/LoraSenderConfigs.yaml"
+
+ShPath: "./RunPySHPath"
+
+LocalUrl: "http://127.0.0.1:26969"
+
+RedisInfo:
+  RedisPort: 6379
+  RedisIP: "127.0.0.1"
+  dbID: 0

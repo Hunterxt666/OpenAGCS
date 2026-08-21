@@ -178,3 +178,11 @@ class LoRaSX126X:
         except Exception as e:
             log.error(f"             [LoRaSX126X] Receive failed, error {e}")
         return None
+
+    def close(self):
+        """Release the UART and GPIO resources owned by this LoRa device."""
+        try:
+            if self.ser is not None and self.ser.is_open:
+                self.ser.close()
+        finally:
+            GPIO.cleanup((self.M0, self.M1))

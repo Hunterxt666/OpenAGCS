@@ -16,8 +16,13 @@ class HeightUploader:
         config = read_config(config_path)
         self.speed_test = SpeedCaculator()
         self.agent = agent
+        self.mission_id = time_str
         self.height_data = [None, None]
         self.pre_data = {"send_local": [None, None], "send_remote": [None, None], "send_db": [None, None]}
+        self.pending_data = {
+            "send_local": None,
+            "send_remote": None,
+        }
         self.remote_url = remote_url
         self.local_url = local_url
         log.info("    [Height Uploader] Initializing module serial port..")
@@ -58,18 +63,46 @@ class HeightUploader:
             time.sleep(0.05)
         log.error("      [Height Uploader] [Get height data] exiting")
 
+    def send_latest_height(self, destination, url):
+        pending_data = getattr(self, "pending_data", None)
+        if pending_data is None:
+            self.pending_data = {}
+            pending_data = self.pending_data
+        pending = pending_data.get(destination)
+        if pending is None:
+            ut, resolve_data = self.height_data
+            if ut is None or resolve_data is None:
+                return None
+            if self.pre_data[destination][0] == ut:
+                return None
+            pending = [ut, resolve_data]
+            pending_data[destination] = pending
+        ut, resolve_data = pending
+        sent = send_height(
+            url=url,
+            time=ut,
+            height=resolve_data,
+            agent=self.agent,
+            mission_id=getattr(self, "mission_id", None),
+        )
+        if sent:
+            self.pre_data[destination] = [ut, resolve_data]
+            pending_data[destination] = None
+        return sent
+
     def upload_height_data_to_local(self):
         log.info("      [Height Uploader] [Local height upload] starting...")
         while not self.stop_flag:
             try:
-                if self.pre_data["send_local"][0] != self.height_data[0] and self.height_data[0]:
-                    ut, resolve_data = self.height_data[0], self.height_data[1]
-                    if resolve_data:
-                        send_height(
-                            url=self.local_url, time=ut, height=resolve_data, agent=self.agent
-                        )
+                sent = self.send_latest_height(
+                    "send_local", self.local_url
+                )
+                if sent:
+                    resolve_data = self.height_data[1]
                     log.success(f"        [Height Uploader] [Local height upload] succeeded, rate {self.speed_test['get_local_height_data']:.2f} ops/s, height {resolve_data}m")
-                    self.pre_data["send_local"] = [ut, resolve_data]
+                elif sent is False:
+                    log.warn("        [Height Uploader] [Local height upload] failed; sample will be retried")
+                    time.sleep(0.5)
             except Exception as e:
                 log.error(f"        [Height Uploader] [Local height upload] error {e}")
                 time.sleep(1)
@@ -80,15 +113,16 @@ class HeightUploader:
         log.info("      [Height Uploader] [Remote height upload] starting...")
         while not self.stop_flag:
             try:
-                if self.pre_data["send_remote"][0] != self.height_data[0] and self.height_data[0]:
-                    ut, resolve_data = self.height_data[0], self.height_data[1]
-                    if resolve_data:
-                        send_height(
-                            url=self.remote_url, time=ut, height=resolve_data, agent=self.agent
-                        )
+                sent = self.send_latest_height(
+                    "send_remote", self.remote_url
+                )
+                if sent:
+                    resolve_data = self.height_data[1]
                     log.success(
                         f"        [Height Uploader] [Remote height upload] succeeded, rate {self.speed_test['get_remote_height_data']:.2f} ops/s, height {resolve_data}m")
-                    self.pre_data["send_remote"] = [ut, resolve_data]
+                elif sent is False:
+                    log.warn("        [Height Uploader] [Remote height upload] failed; sample will be retried")
+                    time.sleep(0.5)
             except Exception as e:
                 log.error(f"        [Height Uploader] [Remote height upload] error {e}")
                 time.sleep(1)

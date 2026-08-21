@@ -16,9 +16,14 @@ class LocationUploader:
     def __init__(self, time_str, config_path, agent, remote_url, local_url):
         log.info("  [RTK Location Uploader] Initializing..")
         self.agent = agent
+        self.mission_id = time_str
         self.remote_url = remote_url
         self.local_url = local_url
         self.pre_data = {"send_remote": None, "send_local": None, "send_db": None, "send_rtk": None}
+        self.pending_data = {
+            "send_remote": None,
+            "send_local": None,
+        }
         config = read_config(config_path)
         self.speed_test = SpeedCaculator()
         log.info("    [RTK Location Uploader] Initializing GGA module serial port..")
@@ -112,19 +117,50 @@ class LocationUploader:
             time.sleep(0.001)
         log.error("      [RTK Location Uploader] [Get GNGGA] exiting")
 
+    def send_latest_position(self, destination, url):
+        pending_data = getattr(self, "pending_data", None)
+        if pending_data is None:
+            self.pending_data = {}
+            pending_data = self.pending_data
+        snapshot = pending_data.get(destination)
+        if snapshot is None:
+            snapshot = copy.deepcopy(self.gga_string)
+            if not snapshot[0] or not snapshot[1]:
+                return None
+            if (
+                snapshot[1]['locate_time']
+                == self.pre_data[destination]
+            ):
+                return None
+            pending_data[destination] = snapshot
+        resolve_data = snapshot[1]
+        locate_time = resolve_data['locate_time']
+        sent = send_pos(
+            url=url,
+            longitude=resolve_data['longitude'],
+            latitude=resolve_data['latitude'],
+            time=locate_time,
+            agent=self.agent,
+            mission_id=getattr(self, "mission_id", None),
+        )
+        if sent:
+            self.pre_data[destination] = locate_time
+            pending_data[destination] = None
+        return sent
+
     def upload_location_data_to_local(self):
         log.info("      [RTK Location Uploader] [Local position upload] starting...")
         while not self.stop_flag:
             try:
-                if self.gga_string[0] and self.gga_string[1]['locate_time'] != self.pre_data["send_local"]:
-                    resolve_data = copy.deepcopy(self.gga_string[1])
-                    if resolve_data:
-                        send_pos(
-                            url=self.local_url, longitude=resolve_data['longitude'], latitude=resolve_data['latitude'],
-                            time=resolve_data['locate_time'], agent=self.agent
-                        )
-                        log.success(f"        [RTK Location Uploader] [Local position upload] succeeded, rate {self.speed_test['get_local_data']:.2f} ops/s, mode {resolve_data['mode']}, sats {resolve_data['star_num']}")
-                        self.pre_data["send_local"] = resolve_data['locate_time']
+                sent = self.send_latest_position(
+                    "send_local", self.local_url
+                )
+                if sent:
+                    resolve_data = self.gga_string[1]
+                    log.success(f"        [RTK Location Uploader] [Local position upload] succeeded, rate {self.speed_test['get_local_data']:.2f} ops/s, mode {resolve_data['mode']}, sats {resolve_data['star_num']}")
+                elif sent is False:
+                    log.warn("        [RTK Location Uploader] [Local position upload] failed; sample will be retried")
+                    time.sleep(0.5)
             except Exception as e:
                 log.error(f"        [RTK Location Uploader] [Local position upload] error {e}")
                 time.sleep(1)
@@ -135,16 +171,15 @@ class LocationUploader:
         log.info("      [RTK Location Uploader] [Remote position upload] starting...")
         while not self.stop_flag:
             try:
-                if self.gga_string[0] and self.gga_string[1]['locate_time'] != self.pre_data["send_remote"]:
-                    resolve_data = copy.deepcopy(self.gga_string[1])
-                    if resolve_data:
-                        send_pos(
-                            url=self.remote_url, longitude=resolve_data['longitude'], latitude=resolve_data['latitude'],
-                            time=resolve_data['locate_time'], agent=self.agent
-                        )
-                        # upload_rtk_data(resolve_data, self.table_name, self.sql_config)
-                        log.success(f"        [RTK Location Uploader] [Remote position upload] succeeded, rate {self.speed_test['get_remote_data']:.2f} ops/s, mode {resolve_data['mode']}, sats {resolve_data['star_num']}")
-                        self.pre_data["send_remote"] = resolve_data['locate_time']
+                sent = self.send_latest_position(
+                    "send_remote", self.remote_url
+                )
+                if sent:
+                    resolve_data = self.gga_string[1]
+                    log.success(f"        [RTK Location Uploader] [Remote position upload] succeeded, rate {self.speed_test['get_remote_data']:.2f} ops/s, mode {resolve_data['mode']}, sats {resolve_data['star_num']}")
+                elif sent is False:
+                    log.warn("        [RTK Location Uploader] [Remote position upload] failed; sample will be retried")
+                    time.sleep(0.5)
             except Exception as e:
                 log.error(f"        [RTK Location Uploader] [Remote position upload] error {e}")
                 time.sleep(1)

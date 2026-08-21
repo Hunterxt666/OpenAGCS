@@ -7,6 +7,8 @@ import serial
 from serial import SerialException
 import datetime
 import platform
+from collections import deque
+from dataclasses import dataclass
 '''
     Serial port configuration
 '''
@@ -54,6 +56,16 @@ class SerialConfig:
 
     # Baud rate
     baud = 9600
+
+
+@dataclass(frozen=True)
+class HeadingSample:
+    """One validated angle frame from the pose sensor."""
+
+    yaw: float
+    acquired_at: datetime.datetime
+    sequence: int
+
 
 class IProtocolResolver(metaclass=ABCMeta):
 
@@ -166,39 +178,84 @@ class DeviceModel:
         self.protocolResolver = protocolResolver
         self.dataProcessor = dataProcessor
         self.dataUpdateListener = dataUpdateListener
+        self.deviceData = {}
+        self.isOpen = False
+        self.serialPort = None
+        self.serialConfig = SerialConfig()
+        self._data_lock = threading.RLock()
+        self._heading_sequence = 0
+        self._heading_sample = None
+        self._heading_samples = deque()
+        self._reader_thread = None
 
     def setDeviceData(self, key, value):
         """Set device data."""
-        self.deviceData[key] = value
+        with self._data_lock:
+            self.deviceData[key] = value
 
     def getDeviceData(self, key):
         """Get device data."""
-        if ( key in self.deviceData):
-            return self.deviceData[key]
-        else:
-            return None
+        with self._data_lock:
+            return self.deviceData.get(key)
 
     def removeDeviceData(self, key):
         """Delete device data."""
-        del self.deviceData[key]
+        with self._data_lock:
+            del self.deviceData[key]
+
+    def publishHeading(self, yaw, acquired_at=None):
+        """Atomically publish a newly decoded heading frame."""
+        if acquired_at is None:
+            acquired_at = datetime.datetime.now()
+        with self._data_lock:
+            self._heading_sequence += 1
+            self.deviceData["angleZ"] = yaw
+            self._heading_sample = HeadingSample(
+                yaw=yaw,
+                acquired_at=acquired_at,
+                sequence=self._heading_sequence,
+            )
+            self._heading_samples.append(self._heading_sample)
+
+    def getHeadingSample(self):
+        """Return the latest immutable heading sample, if one was decoded."""
+        with self._data_lock:
+            return self._heading_sample
+
+    def getHeadingSamplesAfter(self, sequence=None):
+        """Return buffered heading frames newer than ``sequence``."""
+        with self._data_lock:
+            if sequence is None:
+                return tuple(self._heading_samples)
+            while (
+                self._heading_samples
+                and self._heading_samples[0].sequence <= sequence
+            ):
+                self._heading_samples.popleft()
+            return tuple(self._heading_samples)
 
     def readDataTh(self, threadName, delay):
         """Data read thread."""
         # print("Start " + threadName)
-        while True:
+        while self.isOpen:
             # If serial port is open
-            if self.isOpen:
-                try:
-                    tlen = self.serialPort.inWaiting()
-                    if (tlen>0):
-                        data = self.serialPort.read(tlen)
-                        self.onDataReceived(data)
-                except Exception as ex:
-                    print(ex)
-            else:
-                time.sleep(0.1)
-                # print("Paused")
+            try:
+                tlen = self.serialPort.inWaiting()
+                if (tlen>0):
+                    data = self.serialPort.read(tlen)
+                    self.onDataReceived(data)
+                else:
+                    time.sleep(0.005)
+            except (SerialException, OSError) as ex:
+                if self.isOpen:
+                    print(f"Serial read failed: {ex}")
+                self.closeDevice()
                 break
+            except Exception as ex:
+                if self.isOpen:
+                    print(f"Sensor frame processing failed: {ex}")
+                else:
+                    break
 
     def openDevice(self):
         """Open device."""
@@ -207,18 +264,39 @@ class DeviceModel:
         try:
             self.serialPort = serial.Serial(self.serialConfig.portName, self.serialConfig.baud, timeout=0.5)
             self.isOpen = True
-            t = threading.Thread(target=self.readDataTh, args=("Data-Received-Thread",10,))          # Start a thread to receive data
-            t.start()
-        except SerialException:
-            print(f"Failed to open {self.serialConfig.portName} {self.serialConfig.baud}")
+            self._reader_thread = threading.Thread(
+                target=self.readDataTh,
+                args=("Data-Received-Thread", 10),
+                daemon=True,
+            )
+            self._reader_thread.start()
+            return True
+        except (SerialException, OSError) as ex:
+            self.serialPort = None
+            self.isOpen = False
+            raise SerialException(
+                f"Failed to open {self.serialConfig.portName} "
+                f"at {self.serialConfig.baud} baud: {ex}"
+            ) from ex
 
     def closeDevice(self):
         """Close device."""
-        if self.serialPort is not None:
-            self.serialPort.close()
-            # print("Port closed")
         self.isOpen = False
-        # print("Device closed")
+        serial_port = self.serialPort
+        self.serialPort = None
+        if serial_port is not None:
+            try:
+                serial_port.close()
+            except (SerialException, OSError):
+                pass
+        reader_thread = self._reader_thread
+        if (
+            reader_thread is not None
+            and reader_thread is not threading.current_thread()
+            and reader_thread.is_alive()
+        ):
+            reader_thread.join(timeout=1.0)
+        self._reader_thread = None
 
     def onDataReceived(self, data):
         """On data received."""
@@ -289,6 +367,10 @@ class WitProtocolResolver(IProtocolResolver):
     accRange = 16.0      # Acceleration range
     angleRange = 180.0   # Angle range
     TempFindValues=[]    # Data returned from register reads
+
+    def __init__(self):
+        self.TempBytes = []
+        self.TempFindValues = []
 
     def setConfig(self, deviceModel):
         pass
@@ -445,7 +527,9 @@ class WitProtocolResolver(IProtocolResolver):
 
         deviceModel.setDeviceData("angleX", round(angle_x, 3))  # Set device angle X
         deviceModel.setDeviceData("angleY", round(angle_y, 3))  # Set device angle Y
-        deviceModel.setDeviceData("angleZ", round(angle_z, 3))  # Set device angle Z
+        deviceModel.publishHeading(
+            round(angle_z, 3), acquired_at=datetime.datetime.now()
+        )
 
     def get_mag(self,datahex, deviceModel):
         """
@@ -655,10 +739,34 @@ class Sensor:
         self.device.serialConfig.portName = port_name
         self.device.serialConfig.baud = 9600 
         self.device.openDevice() 
-    
+
+    @property
+    def is_open(self):
+        return self.device.isOpen
+
+    @property
+    def heading_sample(self):
+        """Latest validated angle frame with acquisition time and sequence."""
+        return self.device.getHeadingSample()
+
+    def heading_samples_after(self, sequence=None):
+        """Buffered validated angle frames newer than ``sequence``."""
+        return self.device.getHeadingSamplesAfter(sequence)
+
     @property
     def yaw(self):
-        return self.device.deviceData["angleZ"]
+        sample = self.heading_sample
+        return None if sample is None else sample.yaw
+
+    @property
+    def yaw_sequence(self):
+        sample = self.heading_sample
+        return None if sample is None else sample.sequence
+
+    @property
+    def yaw_acquired_at(self):
+        sample = self.heading_sample
+        return None if sample is None else sample.acquired_at
 
     def close(self):
-        self.devide.closeDevice()
+        self.device.closeDevice()

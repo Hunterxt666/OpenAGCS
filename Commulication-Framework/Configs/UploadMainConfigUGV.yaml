@@ -1,0 +1,19 @@
+sh_path: "./RunPySHPath"
+ProcessStartupGraceSeconds: 0.5
+
+scripts:
+  - "./Models/LocalUploaderModels/LocationUploader.py"
+  - "./Models/LocalUploaderModels/HeightUploader.py"
+  - "./Models/LocalUploaderModels/PhotoUploader.py"
+  - "./Models/LocalUploaderModels/YawUploader.py"
+
+configs:
+  - "./Configs/LocalUploaderConfigs/LocationUploadConfig.yaml"
+  - "./Configs/LocalUploaderConfigs/HeightUploadConfig.yaml"
+  - "./Configs/LocalUploaderConfigs/PhotoUploadConfig.yaml"
+  - "./Configs/LocalUploaderConfigs/YawUploadConfig.yaml"
+
+AgentType: "UGV"
+
+RemoteURL: "REMOTE_URL"
+LocalURL: "http://127.0.0.1:26969"

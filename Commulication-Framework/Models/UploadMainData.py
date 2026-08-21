@@ -4,6 +4,7 @@ import time
 from Tools.TimeUtils import time_file_name
 from Tools.ConfigUtils import read_config
 from Tools.FileUtils import check_if_exist, build_run_python_sh
+from Tools.ProcessUtils import ensure_processes_survive_startup
 from Tools.RequestTools import send_time_str, send_clean_str, get_time_str, set_origin_pos, get_origin_pos, set_local_origin_pos
 import Tools.LogUtils as log
 import subprocess
@@ -17,6 +18,10 @@ class UploadMain:
         config = read_config(config_path)
         self.scripts = [os.path.abspath(x) for x in config['scripts']]
         self.configs = [os.path.abspath(x) for x in config['configs']]
+        if len(self.scripts) != len(self.configs):
+            raise ValueError(
+                "Uploader scripts/configs must contain the same number of entries"
+            )
         self.sh_path = os.path.abspath(config['sh_path'])
         check_if_exist(self.sh_path)
         self.p_num = len(self.configs)
@@ -24,7 +29,11 @@ class UploadMain:
         self.remote_url = config["RemoteURL"]
         self.local_url = config["LocalURL"]
         self.agent_type = config["AgentType"]
+        self.process_startup_grace_seconds = float(
+            config.get("ProcessStartupGraceSeconds", 0.5)
+        )
         self.process = []
+        self.origin_thread = None
 
     def uav_origin_pos(self):
         re = None
@@ -73,38 +82,103 @@ class UploadMain:
                 time.sleep(1)
         else:
             if not self.flag_origin:
-                return
+                return False
             flag = False
             while not flag and self.flag_origin:
                 log.info("  [Acquisition Main] UAV waiting to sync time with server")
                 flag = send_time_str(self.remote_url, self.time_str)
                 time.sleep(1)
-        send_time_str(self.local_url, self.time_str)
+        if not self.flag_origin or self.time_str is None:
+            return False
+        if not send_time_str(self.local_url, self.time_str):
+            raise RuntimeError("Failed to set the active mission on the local API")
         log.success("  [Acquisition Main] Backend API check passed")
-        for i in range(self.p_num):
-            self.process.append(subprocess.Popen(['/bin/bash', self.sh_paths[i]], stdin=subprocess.PIPE))
-            log.success(f" [Acquisition Main] Process {self.sh_paths[i]} started successfully")
+        self.generate_sh()
+        try:
+            for i in range(self.p_num):
+                self.process.append(
+                    subprocess.Popen(
+                        ['/bin/bash', self.sh_paths[i]],
+                        stdin=subprocess.PIPE,
+                    )
+                )
+            ensure_processes_survive_startup(
+                list(zip(self.sh_paths, self.process)),
+                self.process_startup_grace_seconds,
+            )
+        except Exception:
+            self.flag_origin = False
+            self._terminate_started_processes()
+            raise
+
+        for sh_path in self.sh_paths:
+            log.success(
+                f" [Acquisition Main] Process {sh_path} "
+                "started successfully"
+            )
+        return True
+
+    def _terminate_started_processes(self):
+        """Terminate partially started uploader children after startup failure."""
+        for process in self.process:
+            if process.poll() is None:
+                process.terminate()
+        for process in self.process:
+            if process.poll() is None:
+                try:
+                    process.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=1.0)
+            if process.stdin is not None:
+                process.stdin.close()
+        self.process = []
 
     def stop_process(self):
         self.flag_origin = False
-        for i in range(self.p_num):
-            self.process[i].stdin.write("quit \n".encode('utf-8'))
-            self.process[i].stdin.flush()
-            log.warn(f" [Acquisition Main] Sent terminate signal to process {self.sh_paths[i]}")
-        for i in range(self.p_num):
-            self.process[i].communicate()
-            log.error(f" [Acquisition Main] Process {self.sh_paths[i]} closed")
+        for i, process in enumerate(self.process):
+            if process.poll() is not None or process.stdin is None:
+                continue
+            try:
+                process.stdin.write("quit \n".encode('utf-8'))
+                process.stdin.flush()
+                log.warn(
+                    " [Acquisition Main] Sent terminate signal to process "
+                    f"{self.sh_paths[i]}"
+                )
+            except (BrokenPipeError, OSError) as error:
+                log.warn(
+                    f" [Acquisition Main] Process {self.sh_paths[i]} "
+                    f"control pipe closed: {error}"
+                )
+        for i, process in enumerate(self.process):
+            process.wait()
+            log.error(
+                f" [Acquisition Main] Process {self.sh_paths[i]} closed"
+            )
         if self.agent_type == "UAV":
             send_clean_str(self.remote_url)
         send_clean_str(self.local_url)
         
     def start_upload(self):
         if self.agent_type == "UGV":
-            threading.Thread(target=self.ugv_origin_pos).start()
+            origin_target = self.ugv_origin_pos
         else:
-            threading.Thread(target=self.uav_origin_pos).start()
-        self.generate_sh()
-        self.start_process()
+            origin_target = self.uav_origin_pos
+        try:
+            started = self.start_process()
+        except Exception:
+            self.flag_origin = False
+            raise
+        if started is False:
+            return False
+        self.origin_thread = threading.Thread(
+            target=origin_target,
+            name=f"{self.agent_type.lower()}-origin-sync",
+            daemon=True,
+        )
+        self.origin_thread.start()
+        return True
     
     
 if __name__ == "__main__":

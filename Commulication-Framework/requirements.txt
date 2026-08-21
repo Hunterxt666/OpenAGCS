@@ -1,7 +1,6 @@
 uvicorn[all]
 fastapi
-datetime
-mysql-connector
+mysql-connector-python
 pyserial
 psutil
 requests

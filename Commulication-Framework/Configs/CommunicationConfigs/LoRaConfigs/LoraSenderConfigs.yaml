@@ -7,5 +7,26 @@ LoraConfigs:
 
 Msgs:
   - "posData"
+  - "emergencyData"
 
-send_frequency: 5
+MsgSources:
+  posData: "local"
+  emergencyData: "remote"
+
+# Re-transmit unchanged state as a link heartbeat. Source timestamps inside
+# posData are preserved, so a heartbeat cannot disguise stale sensing data.
+HeartbeatIntervals:
+  posData: 0.2
+  # False state is sent immediately when it changes. posData carries normal
+  # link liveness, so a second high-rate idle heartbeat is unnecessary.
+  emergencyData: 60.0
+
+MinimumSendIntervals:
+  posData: 0.2
+  emergencyData: 0.0
+
+EmergencyActiveHeartbeatInterval: 0.2
+
+SourceFailureThreshold: 3
+SourceRecoverySuccesses: 3
+send_frequency: 10

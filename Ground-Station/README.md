@@ -17,6 +17,8 @@ In the overall architecture, Ground-Station issues high-level control intent, wh
 ```text
 Ground-Station/
 ├── README.md
+├── requirements.txt
+├── server.py
 ├── index.html
 ├── assets/
 │   ├── car.png
@@ -27,6 +29,8 @@ Ground-Station/
 │   ├── demo-center.css
 │   └── styles.css
 └── src/
+    ├── config/
+    │   └── api_config.json
     ├── main.js
     └── utils/
         ├── api.js
@@ -39,6 +43,10 @@ Ground-Station/
 ```
 
 ## Core Files and Responsibilities
+
+- `server.py`
+  - Runs the operator-side FastAPI Web service.
+  - Serves the UI and proxies a fixed allowlist of requests to the cloud API.
 
 - `index.html`
   - Main UI container and panel layout.
@@ -77,52 +85,80 @@ Ground-Station/
 - Air-ground collaborative monitoring dashboard
 - Operator command dispatch and mission parameter configuration
 
+The D/H dialog accepts `0 <= D <= 100 m` and `0 < H <= 120 m`. Its success
+message is shown only after the remote `/setDH` request has completed
+successfully. To reproduce the paper's reported flight height, set `H = 30 m`
+and wait for that confirmation before issuing takeoff.
+
 ## Quick Start
 
-1. Enter module directory:
+The Ground Station runs on the operator workstation and proxies only an
+allowlist of requests to the remote Communication Framework.
+
+### 1. Create and activate the Conda environment
+
+From the repository root:
+
 ```bash
 cd Ground-Station
+conda create --name agcs-ground-station python=3.9 pip -y
+conda activate agcs-ground-station
+python -m pip install -r requirements.txt
 ```
 
-2. Install dependencies:
-```bash
-npm install
-```
+Run `conda activate agcs-ground-station` before every later operator-server
+session.
 
-3. Configure backend endpoints in the API config file used by `src/utils/api.js`.
-   - File: `src/config/api_config.json`
-   - Fields: `apiBaseUrl`, `amapKey`
-   - Example (direct FastAPI service on port `26969`):
+### 2. Configure the browser client
+
+Set the AMap Web JavaScript API key in `src/config/api_config.json`. Keep
+`apiBaseUrl` as `/api/` when using the bundled proxy:
+
 ```json
 {
-  "apiBaseUrl": "http://<backend-ip>:26969/",
-  "amapKey": "<YOUR_AMAP_WEB_JS_API_KEY>"
+  "apiBaseUrl": "/api/",
+  "amapKey": "<YOUR_AMAP_WEB_JS_API_KEY>",
+  "photo_timeout": 500,
+  "timeout": 500
 }
 ```
-   - Keep the trailing `/` in `apiBaseUrl`, because frontend requests append paths such as `originPos`, `uavPos`, and `setDepart`.
-   - Use `.../api/` only when a reverse proxy (for example Nginx) maps backend routes to an `/api/` prefix.
-   - Create the `amapKey` from the AMap Web JS API console and enable the domain you use for local preview or deployment.
-   - The frontend now loads the AMap SDK dynamically from `src/config/api_config.json`, so do not hardcode the key in `index.html`.
 
-4. Start with npm (if scripts are configured):
+Do not commit production API keys.
+
+### 3. Verify the remote service
+
 ```bash
-npm run dev
+curl --fail "http://REMOTE_HOST:26969/alive"
 ```
 
-5. Run the Comunication Service:
+### 4. Start the operator server
 
-6. Open in browser:
+```bash
+conda activate agcs-ground-station
+python server.py \
+  --remote-url "http://REMOTE_HOST:26969" \
+  --host 127.0.0.1 \
+  --port 8080
+```
+
+The terminal should report that Uvicorn is listening on
+`http://127.0.0.1:8080`.
+
+### 5. Open and verify the interface
+
 ```text
-http://localhost:8080
+http://127.0.0.1:8080
 ```
 
-7. Open browser DevTools (`F12`) to inspect request/console logs during integration.
+The mission panel displays controller-confirmed phases and active cellular/LoRa
+source. Takeoff reports success only after `ESCORT`; landing reports success only
+after confirmed `IDLE` with `airborne=false`.
 
 ## Runtime Notes
 
 - This module expects backend communication/control services to be reachable.
-- For local debugging, ensure CORS/network settings allow browser requests to your backend.
-- For deployment, host as static web assets behind Nginx or any equivalent static server.
+- Set `AGCS_REMOTE_URL` instead of `--remote-url` when using a process manager.
+- For deployment, place `server.py` behind Nginx or an equivalent reverse proxy.
 
 ## Suggested Integration Position
 

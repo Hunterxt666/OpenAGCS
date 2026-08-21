@@ -6,22 +6,93 @@ aligned with the onboard controller state.
 """
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import os
+import time
 from Models.RemoteServerData import RemoteServerData
+from Models.ServerMesegeJsonModel import MissionStateItem
 import Tools.LogUtils as log
+from Tools.TelemetryUtils import (
+    build_ugv_state,
+    compass_heading_to_enu_yaw,
+    normalize_mission_id,
+    validate_follow_parameters,
+)
 from typing import Optional
 
 server_data: Optional[RemoteServerData] = None
 
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+    ],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
+
+MISSION_PHASES = {
+    "IDLE",
+    "TAKEOFF_REQUESTED",
+    "PREPARING",
+    "TAKEOFF",
+    "POSITIONING",
+    "ESCORT",
+    "LAND_REQUESTED",
+    "RETURNING",
+    "DESCENDING",
+    "LANDING",
+    "FAULT",
+}
+
+
+def get_remote_server_config_path():
+    return os.environ.get(
+        "AGCS_REMOTE_SERVER_CONFIG",
+        "Configs/RemoteServerConfig.yaml",
+    )
+
+
+def get_remote_bind(config):
+    """Resolve and validate the configured remote API bind address."""
+    host = os.environ.get(
+        "AGCS_REMOTE_HOST",
+        str(config.get("Host", "0.0.0.0")),
+    ).strip()
+    if not host:
+        raise ValueError("Remote API host must not be empty")
+    try:
+        port = int(
+            os.environ.get(
+                "AGCS_REMOTE_PORT",
+                config.get("Port", 26969),
+            )
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Remote API port must be an integer") from exc
+    if not 1 <= port <= 65535:
+        raise ValueError("Remote API port must be in [1, 65535]")
+    return host, port
+
+
+def require_upload_mission(mission_id):
+    mission_id = normalize_mission_id(mission_id)
+    if mission_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="mission_id is required for telemetry uploads",
+        )
+    return mission_id
 
 
 @app.on_event("startup")
 async def at_start_up():
     global server_data
-    server_data = RemoteServerData("Configs/RemoteServerConfig.yaml")
+    server_data = RemoteServerData(get_remote_server_config_path())
     log.success("[Backend API] Started successfully...")
 
 
@@ -51,7 +122,11 @@ async def get_cur_time_str():
 @app.get("/setTimeStr")
 async def set_time_str(time_string):
     log.info(f"  [Backend API] Setting time ID to {time_string} ...")
-    server_data.set_time_str(time_string)
+    if server_data.set_time_str(time_string) is False:
+        raise HTTPException(
+            status_code=409,
+            detail="Mission ID is older than the active mission",
+        )
     log.success(f"  [Backend API] Set time ID to {time_string} successfully")
 
 
@@ -120,23 +195,41 @@ async def download(path: str):
 
 # uav_data
 @app.get("/updatePos")
-async def update_pos(latitude, longitude, time, agent):
+async def update_pos(latitude, longitude, time, agent, mission_id=None):
+    mission_id = require_upload_mission(mission_id)
     if agent == "UAV":
-        server_data.set_uav_position(latitude=float(latitude), longitude=float(longitude), time=time)
-        log.success("  [Backend API] Updated UAV position")
+        stored = server_data.set_uav_position(
+            latitude=float(latitude),
+            longitude=float(longitude),
+            time=time,
+            mission_id=mission_id,
+        )
     else:
-        server_data.set_ugv_position(latitude=float(latitude), longitude=float(longitude), time=time)
-        log.success("  [Backend API] Updated UGV position")
+        stored = server_data.set_ugv_position(
+            latitude=float(latitude),
+            longitude=float(longitude),
+            time=time,
+            mission_id=mission_id,
+        )
+    if stored is False:
+        raise HTTPException(status_code=409, detail="Mission ID is no longer active")
+    log.success(f"  [Backend API] Updated {agent} position")
 
 
 @app.get("/updateHeight")
-async def uav_update_height(height, time, agent):
+async def uav_update_height(height, time, agent, mission_id=None):
+    mission_id = require_upload_mission(mission_id)
     if agent == "UAV":
-        server_data.set_uav_height(float(height), time)
-        log.success("  [Backend API] Updated UAV height")
+        stored = server_data.set_uav_height(
+            float(height), time, mission_id=mission_id
+        )
     else:
-        server_data.set_ugv_height(float(height), time)
-        log.success("  [Backend API] Updated UGV height")
+        stored = server_data.set_ugv_height(
+            float(height), time, mission_id=mission_id
+        )
+    if stored is False:
+        raise HTTPException(status_code=409, detail="Mission ID is no longer active")
+    log.success(f"  [Backend API] Updated {agent} height")
 
 
 @app.get("/uavHeight")
@@ -152,13 +245,21 @@ async def get_uav_height():
 
 
 @app.get("/setOrientation")
-async def uav_update_orientation(orientation, time, agent):
+async def uav_update_orientation(
+    orientation, time, agent, mission_id=None
+):
+    mission_id = require_upload_mission(mission_id)
     if agent == "UAV":
-        server_data.set_uav_orientation(float(orientation), time)
-        log.success("  [Backend API] Updated UAV orientation")
+        stored = server_data.set_uav_orientation(
+            float(orientation), time, mission_id=mission_id
+        )
     else:
-        server_data.set_ugv_orientation(float(orientation), time)
-        log.success("  [Backend API] Updated UGV orientation")
+        stored = server_data.set_ugv_orientation(
+            float(orientation), time, mission_id=mission_id
+        )
+    if stored is False:
+        raise HTTPException(status_code=409, detail="Mission ID is no longer active")
+    log.success(f"  [Backend API] Updated {agent} orientation")
 
 
 @app.get("/uavOrientation")
@@ -168,7 +269,9 @@ async def get_uav_orientation():
     else:
         log.success("  [Backend API] Returning UAV orientation")
         return {
-            "uav_orientation": server_data.redis_dict['uav_orientation'],
+            "uav_orientation": compass_heading_to_enu_yaw(
+                server_data.redis_dict["uav_orientation"]
+            ),
             "time": server_data.redis_dict['uav_orientation_time']
         }
 
@@ -180,9 +283,47 @@ async def get_ugv_orientation():
     else:
         log.success("  [Backend API] Returning UGV orientation")
         return {
-            "ugv_orientation": server_data.redis_dict['ugv_orientation'],
+            "ugv_orientation": compass_heading_to_enu_yaw(
+                server_data.redis_dict["ugv_orientation"]
+            ),
             "time": server_data.redis_dict['ugv_orientation_time']
         }
+
+
+@app.get("/ugvState")
+async def get_ugv_state():
+    keys = (
+        "time_str",
+        "ugv_current_pos",
+        "ugv_location_time",
+        "ugv_orientation",
+        "ugv_orientation_time",
+        "ugv_height",
+        "ugv_height_time",
+        "ugv_velocity",
+        "ugv_velocity_time",
+    )
+    snapshot = server_data.redis_dict.get_many(keys)
+    try:
+        state = build_ugv_state(
+            mission_id=snapshot["time_str"],
+            current_pos=snapshot["ugv_current_pos"],
+            position_time=snapshot["ugv_location_time"],
+            filtered_heading=snapshot["ugv_orientation"],
+            heading_time=snapshot["ugv_orientation_time"],
+            height=snapshot["ugv_height"],
+            height_time=snapshot["ugv_height_time"],
+            velocity=snapshot["ugv_velocity"],
+            velocity_time=snapshot["ugv_velocity_time"],
+        )
+    except (TypeError, ValueError):
+        log.error("  [Backend API] Complete UGV state is not available")
+        raise HTTPException(
+            status_code=404,
+            detail="Complete UGV state for the active mission is not available",
+        )
+    log.success("  [Backend API] Returning atomic UGV state")
+    return state
 
 
 @app.get("/uavPos")
@@ -318,6 +459,34 @@ async def set_emergency_stop():
         "msg": "success"
     }
 
+
+@app.get("/clearEmergencyStop")
+async def clear_emergency_stop():
+    server_data.clear_emergency_stop()
+    log.success("  [Backend API] Emergency stop cleared")
+    return {
+        "emergency_stop_flag": server_data.redis_dict['emergency_stop'],
+        "msg": "success",
+    }
+
+
+@app.get("/emergencyData")
+async def get_emergency_data():
+    snapshot = server_data.redis_dict.get_many(
+        ("time_str", "emergency_stop")
+    )
+    mission_id = normalize_mission_id(snapshot["time_str"])
+    if mission_id is None:
+        raise HTTPException(status_code=404, detail="No active mission")
+    return {
+        "emergencyData": [
+            bool(snapshot["emergency_stop"]),
+            mission_id,
+            time.time(),
+        ]
+    }
+
+
 @app.get("/getDistance")
 async def get_distance_api():
     log.success("  [Backend API] Distance requested")
@@ -341,19 +510,110 @@ async def get_emergency_stop():
 
 @app.get("/setDepart")
 async def set_depart():
+    mission_id = normalize_mission_id(server_data.redis_dict["time_str"])
+    if mission_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Initialize a mission before requesting takeoff",
+        )
     server_data.set_depart()
+    server_data.set_mission_state(
+        mission_id,
+        "TAKEOFF_REQUESTED",
+    )
     log.success("  [Backend API] Takeoff command issued")
     return {
-        "msg": f"success, change, depart -> {server_data.redis_dict['depart']}"
+        "msg": "takeoff request accepted",
+        "mission_id": mission_id,
+        "phase": "TAKEOFF_REQUESTED",
     }
 
 
 @app.get("/setLand")
 async def set_land():
+    mission_id = normalize_mission_id(server_data.redis_dict["time_str"])
+    if mission_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No active mission is available for landing",
+        )
     server_data.set_land()
+    server_data.set_mission_state(
+        mission_id,
+        "LAND_REQUESTED",
+    )
     log.success("  [Backend API] Landing command issued")
     return {
-        "msg": f"success, change, depart -> {server_data.redis_dict['depart']}"
+        "msg": "landing request accepted",
+        "mission_id": mission_id,
+        "phase": "LAND_REQUESTED",
+    }
+
+
+@app.post("/missionState")
+async def set_mission_state(item: MissionStateItem):
+    mission_id = require_upload_mission(item.mission_id)
+    phase = str(item.phase).strip().upper()
+    if phase not in MISSION_PHASES:
+        raise HTTPException(status_code=422, detail="Unknown mission phase")
+    active_source = item.active_source
+    if active_source is not None:
+        active_source = str(active_source).strip().lower()
+        if active_source not in {"cellular", "lora"}:
+            raise HTTPException(
+                status_code=422,
+                detail="active_source must be cellular or lora",
+            )
+    if not server_data.set_mission_state(
+        mission_id,
+        phase,
+        active_source,
+        item.airborne,
+        True,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Mission state belongs to an inactive mission",
+        )
+    return {
+        "msg": "mission state stored",
+        "mission_id": mission_id,
+        "phase": phase,
+        "active_source": active_source,
+        "airborne": item.airborne,
+    }
+
+
+@app.get("/missionState")
+async def get_mission_state():
+    keys = (
+        "time_str",
+        "mission_phase",
+        "mission_phase_time",
+        "mission_controller_time",
+        "mission_active_source",
+        "mission_airborne",
+    )
+    snapshot = server_data.redis_dict.get_many(keys)
+    mission_id = normalize_mission_id(snapshot["time_str"])
+    if mission_id is None or snapshot["mission_phase"] is None:
+        raise HTTPException(status_code=404, detail="Mission state unavailable")
+    updated_at = snapshot["mission_phase_time"]
+    controller_updated_at = snapshot["mission_controller_time"]
+    age = (
+        None
+        if controller_updated_at is None
+        else max(0.0, time.time() - controller_updated_at)
+    )
+    return {
+        "mission_id": mission_id,
+        "phase": snapshot["mission_phase"],
+        "active_source": snapshot["mission_active_source"],
+        "updated_at": updated_at,
+        "controller_updated_at": controller_updated_at,
+        "age": age,
+        "controller_online": age is not None and age <= 3.0,
+        "airborne": bool(snapshot["mission_airborne"]),
     }
 
 
@@ -387,10 +647,18 @@ async def get_uav_ugv_pos():
 
 @app.get("/setDH")
 async def set_DH(D, H):
-    server_data.set_DH(float(D), float(H))
+    try:
+        guiding_distance, flight_height = validate_follow_parameters(
+            float(D), float(H)
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    server_data.set_DH(guiding_distance, flight_height)
     log.success("  [Backend API] Set D and H")
     return {
-        "msg": f"success -> {D} {H}"
+        "D": guiding_distance,
+        "H": flight_height,
+        "msg": "success",
     }
 
 
@@ -421,9 +689,28 @@ async def get_system_data():
         "ugv_t": server_data.redis_dict['ugv_location_time'],
         "uav_h": server_data.redis_dict['uav_height'],
         "uav_t": server_data.redis_dict['uav_location_time'],
-        "uav_yaw": server_data.redis_dict['uav_orientation'],
-        "ugv_yaw": server_data.redis_dict['ugv_orientation'],
+        "uav_yaw": (
+            None
+            if server_data.redis_dict["uav_orientation"] is None
+            else compass_heading_to_enu_yaw(
+                server_data.redis_dict["uav_orientation"]
+            )
+        ),
+        "ugv_yaw": (
+            None
+            if server_data.redis_dict["ugv_orientation"] is None
+            else compass_heading_to_enu_yaw(
+                server_data.redis_dict["ugv_orientation"]
+            )
+        ),
         "distance": server_data.get_distance(),
+        "mission_phase": server_data.redis_dict["mission_phase"],
+        "mission_active_source": server_data.redis_dict[
+            "mission_active_source"
+        ],
+        "mission_airborne": bool(
+            server_data.redis_dict["mission_airborne"]
+        ),
     }
 
 
@@ -444,7 +731,7 @@ if __name__ == "__main__":
     from Tools.FileUtils import check_if_exist
     from Tools.DBUtils import RedisDict
     import shutil
-    config = read_config("Configs/RemoteServerConfig.yaml")
+    config = read_config(get_remote_server_config_path())
 
     photo_path = os.path.abspath(config['PhotoPath'])
     pre_clean = config['PreCleanPath']
@@ -466,6 +753,7 @@ if __name__ == "__main__":
         "uav_photo_time": None, "ugv_photo_time": None,
         "ugv_longitude": -1, "ugv_latitude": -1,
         "ugv_location_time": None, "uav_ugv_distance": -1,
+        "ugv_velocity": [0.0, 0.0], "ugv_velocity_time": None,
         "ugv_height": None, "ugv_height_time": None,
         "ugv_orientation": None, "ugv_orientation_time": None,
         "uav_orientation": None, "uav_orientation_time": None,
@@ -473,9 +761,19 @@ if __name__ == "__main__":
         "origin_latitude": -1, "origin_longitude": -1,
         "origin_time": None, "threshold": 2, "emergency_stop": False,
         "depart": False, "uav_current_pos": [None, None],
-        "ugv_current_pos": [None, None], "D": None, "H": None, "DH_t": 0
+        "ugv_current_pos": [None, None], "D": None, "H": None, "DH_t": 0,
+        "mission_phase": None, "mission_phase_time": None,
+        "mission_controller_time": None,
+        "mission_active_source": None,
+        "mission_airborne": False,
     }
     redis_dict.init_keys(init_dict)
     log.success(" [Remote Data Server] Redis initialized")
 
-    uvicorn.run(app='remote_backend_api:app', host='0.0.0.0', port=26969, workers=config['Workers'])
+    bind_host, bind_port = get_remote_bind(config)
+    uvicorn.run(
+        app='remote_backend_api:app',
+        host=bind_host,
+        port=bind_port,
+        workers=config['Workers'],
+    )

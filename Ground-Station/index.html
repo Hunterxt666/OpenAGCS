@@ -51,6 +51,7 @@
             <span><span class="span_bold">UGV Distance: </span><span id="run_distance">-</span> m</span><br>
             <span><span class="span_bold">UAV-UGV Distance: </span><span id="distance">-</span> m</span><br>
             <span><span class="span_bold">Lead Distance-Height (D-H): </span><span id="D-H">-</span>m</span><br>
+            <span><span class="span_bold">Mission Phase: </span><span id="mission-phase">-</span></span><br>
             <span><span class="span_bold">Origin Time: </span><span id="origin">-</span></span>
         </div>
     </div>
@@ -60,10 +61,10 @@
         <div class="settings-content">
             <input type="button" class="btn" value="Refresh Origin ⚓" onclick="init_display()"/>
             <input type="button" class="btn" value="Start Tracking Refresh 🏃" onclick="startTracking()"/>
-            <input type="button" class="btn" value="Takeoff 🛫" onclick="setDepart()"/>
-            <input type="button" class="btn" value="Land 🛬" onclick="setLand()"/>
+            <input type="button" class="btn" id="takeoff-button" value="Takeoff 🛫" onclick="setDepart()"/>
+            <input type="button" class="btn" id="land-button" value="Land 🛬" onclick="setLand()"/>
             <input type="button" class="btn" value="Pause Tracking Refresh 💺" onclick="stopTracking()"/>
-            <input type="button" class="btn btn-close" value="Clear Data ❌"  onclick="stop_display()" "/>
+            <input type="button" class="btn btn-close" value="Clear Data ❌" onclick="stop_display()"/>
         </div>
         <button class="toggle-btn" onclick="toggleSettingsDisplay()">Ground Station Settings ⚙ <span id="toggle-icon">&#9650;</span>
         </button>

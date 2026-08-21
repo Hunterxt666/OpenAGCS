@@ -82,11 +82,16 @@ function startDataFilling(){
 async function setAllSpan(){
     const data = await fetchSystemData();
     if (data != null){
+        applyMissionState({
+            phase: data.mission_phase,
+            active_source: data.mission_active_source,
+            airborne: data.mission_airborne
+        });
         document.getElementById("D-H").innerText = `${data.D == null? '-':Math.round(data.D)} - ${data.H == null? '-':Math.round(data.H)}` ;
         document.getElementById("distance").innerText = data.distance == null ?'-': Math.round(data.distance);
-        document.getElementById("agent1-title").innerText = `UAV🚁${data.depart != null && data.depart?'🛫': '🛬'}`;
+        document.getElementById("agent1-title").innerText = `UAV🚁${data.mission_airborne ? '🛫': '🛬'}`;
         document.getElementById("agent1-heading").innerText = data.uav_yaw == null ?'-': Math.round(data.uav_yaw);
-        document.getElementById("agent2-heading").innerText = data.ugv_yaw == null ?'-': - Math.round(data.ugv_yaw);
+        document.getElementById("agent2-heading").innerText = data.ugv_yaw == null ?'-': Math.round(data.ugv_yaw);
         document.getElementById("agent1-time").innerText = data.uav_t == null ?'-': data.uav_t.toFixed(1);
         document.getElementById("agent1-height").innerText = data.uav_h == null ?'-': Math.round(data.uav_h);
         document.getElementById("agent2-time").innerText = data.ugv_t == null ?'-': data.ugv_t.toFixed(1);

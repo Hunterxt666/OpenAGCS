@@ -1,4 +1,6 @@
 sh_path: "./RunPySHPath"
+ProcessStartupGraceSeconds: 0.5
+
 scripts:
   - "./Models/LocalUploaderModels/LocationUploader.py"
   - "./Models/LocalUploaderModels/HeightUploader.py"

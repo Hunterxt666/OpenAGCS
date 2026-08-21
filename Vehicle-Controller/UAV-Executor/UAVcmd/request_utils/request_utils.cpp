@@ -91,6 +91,7 @@ string get(const string & address, const string& type = string("Local")) {
         // Check whether request succeeded
         if (res != CURLE_OK) {
             USER_LOG_INFO("         [Request] %s timed out", url.c_str());
+            curl_easy_cleanup(curl);
             return "";
         }
         else{
@@ -111,18 +112,31 @@ string get(const string & address, const string& type = string("Local")) {
     return response;
 }
 
-bool get_emergency(void){
-    string original_re = get(string("/emergencyStop"), string("Remote"));
-    if(!original_re.empty()){    
-        json re_json = json::parse(original_re);
-        // cout << re_json << endl;
-        USER_LOG_INFO("         [Request] get_emergency succeeded");
-        return re_json.at("emergency_stop_flag").get<bool>();
+bool get_emergency(void)
+{
+    // The local endpoint includes emergency commands received over LoRa.
+    // Retain the remote query as a compatibility path while cellular is up.
+    const string sources[] = {"Local", "Remote"};
+    for (const string &source : sources) {
+        const string response = get(string("/emergencyStop"), source);
+        if (response.empty()) {
+            continue;
+        }
+        try {
+            const json payload = json::parse(response);
+            if (payload.at("emergency_stop_flag").get<bool>()) {
+                USER_LOG_INFO(
+                    "         [Request] emergency stop received via %s",
+                    source.c_str());
+                return true;
+            }
+        } catch (const exception &error) {
+            USER_LOG_ERROR(
+                "         [Request] invalid %s emergency response: %s",
+                source.c_str(), error.what());
+        }
     }
-    else{
-        USER_LOG_INFO("         [Request] get_emergency failed");
-        return false;
-    }
+    return false;
 }
 
 OriginPosition get_original_pos(void){

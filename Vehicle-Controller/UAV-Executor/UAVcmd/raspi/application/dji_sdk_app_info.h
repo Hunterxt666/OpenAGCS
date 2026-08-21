@@ -33,13 +33,18 @@ extern "C" {
 #endif
 
 /* Exported constants --------------------------------------------------------*/
-// ATTENTION: User must goto https://developer.dji.com/user/apps/#all to create your own dji sdk application, get dji sdk application
-// information then fill in the application information here.
-#define USER_APP_NAME               "Zhong Sir M3E"
-#define USER_APP_ID                 "150700"
-#define USER_APP_KEY                "999eec7b761c8ca61cd8c7077064e5f"
-#define USER_APP_LICENSE            "BjBzUzcNKy/iEFqwhfGyAebRuh7+0NdjFdecDKpWck5GgjuUdr4frGyAj24cHyd8LkCE6VEJDshwQyqmrGYYnV2rDUJvG/1V+dNtpZEs9zPNoMoiX766J44VWGW9OT1/IU4gmuylTsPSPQlRa1nCBE0UM0TCrM+z6psxJ+djwwU7B6R4PHLMnHIq7U5YbZVl/ssd0TUbI5HS5OLBibw8KYXAHxqJlTYVSKLos7a7Ke4m6VwnB2NzgBkHgnCc0qhl7yBCgt6DgGxdnl8NvAGZ1/R+lvnVXAfTWun8RRhIluhCgv3c0IQR/dxUZ/4AeUYXmsw4VbrwUfmhVeDTaJ0QGA=="
-#define USER_DEVELOPER_ACCOUNT      "260388880@qq.com"
+/*
+ * Create a Payload SDK application at:
+ * https://developer.dji.com/user/apps/#all
+ *
+ * Replace these placeholders only in the private deployment workspace.
+ * Never commit real DJI application credentials to source control.
+ */
+#define USER_APP_NAME               "YOUR_DJI_PSDK_APP_NAME"
+#define USER_APP_ID                 "YOUR_DJI_PSDK_APP_ID"
+#define USER_APP_KEY                "YOUR_DJI_PSDK_APP_KEY"
+#define USER_APP_LICENSE            "YOUR_DJI_PSDK_APP_LICENSE"
+#define USER_DEVELOPER_ACCOUNT      "YOUR_DJI_DEVELOPER_ACCOUNT"
 #define USER_BAUD_RATE              "460800"
 
 /* Exported types ------------------------------------------------------------*/
