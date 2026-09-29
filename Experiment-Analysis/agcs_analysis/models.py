@@ -29,5 +29,5 @@ class OutputPaths:
 class FeatureResult:
     name: str
     tables: list[str] = field(default_factory=list)
-    figures: list[int] = field(default_factory=list)
+    figures: list[int | str] = field(default_factory=list)
     details: dict = field(default_factory=dict)

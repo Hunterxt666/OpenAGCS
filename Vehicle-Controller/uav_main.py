@@ -99,10 +99,10 @@ def parse_args(argv=None):
     parser.add_argument(
         "--stale-state-hold-timeout",
         type=positive_float,
-        default=os.environ.get("AGCS_STALE_STATE_HOLD_TIMEOUT", "1.0"),
+        default=os.environ.get("AGCS_STALE_STATE_HOLD_TIMEOUT", "2.0"),
         help=(
             "maximum GV reference hold time before safe hover in seconds "
-            "(default: 1.0)"
+            "(default: 2.0)"
         ),
     )
     parser.add_argument(

@@ -35,7 +35,7 @@ def maximum_allowable_state_age(
 
 
 def state_age_envelope() -> pd.DataFrame:
-    """Build manuscript Table II using its speed and yaw-rate grid."""
+    """Build manuscript Table IV using its speed and yaw-rate grid."""
 
     rows: list[dict[str, float]] = []
     for speed_kmh in SPEEDS_KMH:

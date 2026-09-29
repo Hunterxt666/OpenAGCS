@@ -33,7 +33,7 @@ class ExperimentDataset:
                 self.controller(trial["file"]),
                 resolve_path(trial["speed_file"]),
             )
-            for trial in self.manifest["trials"]["table_i"]
+            for trial in self.manifest["trials"]["table_ii"]
         ]
 
     def representative_controller(self) -> ControllerLog:
@@ -51,7 +51,7 @@ class ExperimentDataset:
         return self.controller(self.manifest["trials"]["communication_5g"])
 
     def communication_metrics(self) -> pd.DataFrame:
-        """Return the control-aligned 5G/LoRa stream used by Table III."""
+        """Return the control-aligned 5G/LoRa stream used by Table V."""
         path = resolve_path(self.manifest["trials"]["communication_metrics"])
         data = pd.read_csv(path, encoding="utf-8-sig")
         required = {
@@ -69,9 +69,9 @@ class ExperimentDataset:
             )
         return data.sort_values("time").reset_index(drop=True)
 
-    def figure_9_update_streams(self) -> pd.DataFrame:
+    def figure_10_update_streams(self) -> pd.DataFrame:
         """Return controller-accepted cellular and LoRa update events."""
-        path = resolve_path(self.manifest["trials"]["figure_9_update_streams"])
+        path = resolve_path(self.manifest["trials"]["figure_10_update_streams"])
         data = pd.read_csv(path)
         required = {
             "cellular_mode",
@@ -85,26 +85,26 @@ class ExperimentDataset:
         missing = required - set(data.columns)
         if missing:
             raise ValueError(
-                f"Missing Figure 9 columns in {path}: "
+                f"Missing Figure 10 columns in {path}: "
                 + ", ".join(sorted(missing))
             )
         return data.sort_values(
             ["cellular_mode", "line_idx"], kind="stable"
         ).reset_index(drop=True)
 
-    def figure_10_position_streams(
+    def figure_11_position_streams(
         self,
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """Return the full 5G and LoRa position streams used by Figure 10."""
+        """Return the full 5G and LoRa position streams used by Figure 11."""
         streams = []
-        for key in ("figure_10_5g_positions", "figure_10_lora_positions"):
+        for key in ("figure_11_5g_positions", "figure_11_lora_positions"):
             path = resolve_path(self.manifest["trials"][key])
             data = pd.read_csv(path)
             required = {"state_time_s", "x_m", "y_m"}
             missing = required - set(data.columns)
             if missing:
                 raise ValueError(
-                    f"Missing Figure 10 columns in {path}: "
+                    f"Missing Figure 11 columns in {path}: "
                     + ", ".join(sorted(missing))
                 )
             streams.append(
@@ -114,9 +114,9 @@ class ExperimentDataset:
             )
         return streams[0], streams[1]
 
-    def figure_11_errors(self) -> pd.DataFrame:
+    def supplementary_communication_errors(self) -> pd.DataFrame:
         """Return the corrected forward-lead error reconstruction."""
-        path = resolve_path(self.manifest["trials"]["figure_11_errors"])
+        path = resolve_path(self.manifest["trials"]["supplementary_communication_errors"])
         data = pd.read_csv(path, encoding="utf-8-sig")
         required = {
             "time",
@@ -130,10 +130,43 @@ class ExperimentDataset:
         missing = required - set(data.columns)
         if missing:
             raise ValueError(
-                f"Missing Figure 11 columns in {path}: "
+                f"Missing supplementary communication-error columns in {path}: "
                 + ", ".join(sorted(missing))
             )
         return data.sort_values("time", kind="stable").reset_index(drop=True)
+
+    def closed_loop_mode_trials(self) -> dict[str, pd.DataFrame]:
+        """Return the separate 5G-only, LoRa-only, and dual-mode flight logs."""
+        trials: dict[str, pd.DataFrame] = {}
+        required = {
+            "time_s", "gv_path_progress_m", "gv_x_m", "gv_y_m", "uav_x_m",
+            "uav_y_m", "error_x_m", "error_y_m", "state_age_s",
+            "cellular_state_age_s", "selected_source", "terminated",
+        }
+        for mode, value in self.manifest["trials"]["closed_loop_modes"].items():
+            path = resolve_path(value)
+            data = pd.read_csv(path, encoding="utf-8-sig")
+            missing = required - set(data.columns)
+            if missing:
+                raise ValueError(
+                    f"Missing closed-loop columns in {path}: "
+                    + ", ".join(sorted(missing))
+                )
+            trials[mode] = data.sort_values("time_s", kind="stable").reset_index(drop=True)
+        return trials
+
+    def closed_loop_route(self) -> pd.DataFrame:
+        """Return the measured road centerline used by the closed-loop plots."""
+        path = resolve_path(self.manifest["trials"]["closed_loop_route"])
+        data = pd.read_csv(path, encoding="utf-8-sig")
+        required = {"route_progress_m", "x_m", "y_m"}
+        missing = required - set(data.columns)
+        if missing:
+            raise ValueError(
+                f"Missing closed-loop route columns in {path}: "
+                + ", ".join(sorted(missing))
+            )
+        return data.sort_values("route_progress_m", kind="stable").reset_index(drop=True)
 
     def heading_directory(self) -> Path:
         return resolve_path("data/heading")

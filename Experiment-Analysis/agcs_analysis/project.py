@@ -11,7 +11,7 @@ from .models import FeatureResult, OutputPaths
 from .reporting import export_timestamp_data
 
 
-FEATURES = ("tracking", "communication", "heading", "platoon")
+FEATURES = ("tracking", "communication", "closed_loop", "heading", "platoon")
 
 
 def load_feature(name: str):
@@ -34,6 +34,7 @@ def run_project(
     selected_features: list[str] | tuple[str, ...] = ("all",),
     generate_figures: bool = True,
     clean: bool = False,
+    heading_protocol: str | None = None,
 ) -> dict:
     features = normalize_features(selected_features)
     if clean and output_dir.exists():
@@ -42,6 +43,10 @@ def run_project(
     outputs = OutputPaths.from_root(output_dir)
     outputs.create()
     dataset = ExperimentDataset()
+    if heading_protocol is not None:
+        if heading_protocol not in ("held-out", "legacy-paper"):
+            raise ValueError(f"Unknown heading protocol: {heading_protocol}")
+        dataset.heading_settings()["evaluation_protocol"] = heading_protocol
     if generate_figures:
         configure_plots()
 
@@ -72,6 +77,10 @@ def run_project(
         },
         "analysis_notes": dataset.manifest["notes"],
     }
+    if "heading" in features:
+        summary["analysis_notes"]["heading_active_protocol"] = dataset.heading_settings().get(
+            "evaluation_protocol", "held-out",
+        )
     (outputs.root / "analysis_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )

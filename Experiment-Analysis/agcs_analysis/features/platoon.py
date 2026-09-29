@@ -5,12 +5,12 @@ from ..models import FeatureResult, OutputPaths
 from ..platoon_simulation import (
     EscortConfig,
     PlatoonConfig,
-    figure_13,
+    figure_15,
     simulate_platoon,
     simulate_uav_escort,
     simulation_series,
     summarize_escort,
-    table_vii,
+    table_xiv,
     write_simulation_metadata,
 )
 from ..reporting import export_table
@@ -30,12 +30,12 @@ def run(
     result = simulate_uav_escort(time_s, platoon_states, escort_config)
     metrics = summarize_escort(result)
 
-    export_table(table_vii(metrics), "table_VII", outputs.tables)
+    export_table(table_xiv(metrics), "table_XIV_platoon_uav_delay_loss_metrics", outputs.tables)
     simulation_series(time_s, platoon_states, result).to_csv(
-        outputs.intermediate / "figure_13_simulation_series.csv", index=False
+        outputs.intermediate / "figure_15_simulation_series.csv", index=False
     )
     write_simulation_metadata(
-        outputs.intermediate / "figure_13_simulation_metadata.json",
+        outputs.intermediate / "figure_15_simulation_metadata.json",
         platoon_config,
         escort_config,
         metrics,
@@ -43,18 +43,18 @@ def run(
 
     figures: list[int] = []
     if generate_figures:
-        figure_13(
+        figure_15(
             time_s,
             platoon_states,
             result,
             outputs.figures,
             escort_config.freshness_threshold_s,
         )
-        figures = [13]
+        figures = [15]
 
     return FeatureResult(
         name="platoon",
-        tables=["table_VII"],
+        tables=["table_XIV_platoon_uav_delay_loss_metrics"],
         figures=figures,
         details={
             "random_seed": escort_config.random_seed,

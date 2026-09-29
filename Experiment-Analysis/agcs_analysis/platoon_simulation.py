@@ -1,4 +1,4 @@
-"""Reproducible leader-only platoon escort simulation for Figure 13.
+"""Reproducible leader-only platoon escort simulation for Figure 15.
 
 The simulation uses one leader GV, six follower GVs, and one UAV.  The UAV
 receives only the delayed leader state, causally extrapolates that state with
@@ -298,7 +298,7 @@ def simulate_uav_escort(
 
 
 def summarize_escort(result: EscortResult) -> dict[str, float]:
-    """Return the six metrics reported in paper Table VII."""
+    """Return the six metrics reported in paper Table XIV."""
 
     return {
         "mean_state_age_s": float(np.mean(result.state_age_s)),
@@ -314,7 +314,7 @@ def summarize_escort(result: EscortResult) -> dict[str, float]:
     }
 
 
-def table_vii(metrics: dict[str, float]) -> pd.DataFrame:
+def table_xiv(metrics: dict[str, float]) -> pd.DataFrame:
     """Format the simulation summary as the two-column manuscript table."""
 
     return pd.DataFrame(
@@ -341,7 +341,7 @@ def simulation_series(
     platoon_states: np.ndarray,
     result: EscortResult,
 ) -> pd.DataFrame:
-    """Build the machine-readable audit series underlying Figure 13."""
+    """Build the machine-readable audit series underlying Figure 15."""
 
     data: dict[str, np.ndarray] = {
         "time_s": time_s,
@@ -369,7 +369,7 @@ def simulation_series(
     return pd.DataFrame(data)
 
 
-def figure_13(
+def figure_15(
     time_s: np.ndarray,
     platoon_states: np.ndarray,
     result: EscortResult,
@@ -481,7 +481,7 @@ def figure_13(
     error_axis.set_title("(c)")
 
     fig.tight_layout(w_pad=1.2)
-    save(fig, output_dir, "figure_13")
+    save(fig, output_dir, "figure_15_platoon_uav_delay_loss")
 
 
 def write_simulation_metadata(

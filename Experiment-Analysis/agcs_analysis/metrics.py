@@ -862,7 +862,7 @@ def reconstruct_source_mode(
     timeout_s: float,
     slot_s: float,
 ) -> pd.DataFrame:
-    """Reproduce the source-selection rule used for the paper's Table III.
+    """Reproduce the source-selection rule used for the paper's Table V.
 
     The historical analysis works on UGV sensing timestamps. It falls back to
     LoRa only when the most recent cellular state is older than ``timeout_s``
@@ -977,7 +977,7 @@ def prepare_aligned_communication(
 
     The row time is the control-layer evaluation instant.  State age is kept
     exactly as logged in ``dt_5g`` and ``dt_lora``; no event-gap proxy is used
-    for the strict timeout-rate column in Table III.
+    for the strict timeout-rate column in Table V.
     """
     start, end = window
     if end <= start:
@@ -1064,7 +1064,7 @@ def summarize_aligned_link_performance(
     timeout_s: float,
     slot_s: float,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Reproduce Table III from control-aligned GV position streams."""
+    """Reproduce Table V from control-aligned GV position streams."""
     if slot_s <= 0.0:
         raise ValueError("slot_s must be positive")
     aligned = prepare_aligned_communication(data, window, timeout_s)
@@ -1641,7 +1641,7 @@ def analyze_heading_filters(
 
 # Descriptive compatibility aliases retained for older analysis notebooks.
 # Paper numbering is owned by the feature modules because the current revision
-# maps communication to Table III and RTK-referenced yaw comparison to Table IV.
+# maps communication to Table V and RTK-referenced yaw comparison to Table VII.
 tracking_trial_metrics = summarize_tracking_trials
 outer_loop_response_models = fit_response_models
 delay_sensitivity_metrics = analyze_delay_sensitivity

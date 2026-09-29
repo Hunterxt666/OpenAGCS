@@ -10,13 +10,13 @@ from .config import PROJECT_DIR
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run the AGCS tracking, communication, heading, and platoon analyses."
+            "Run the AGCS tracking, communication, closed-loop, heading, and platoon analyses."
         )
     )
     parser.add_argument(
         "feature",
         nargs="*",
-        choices=("all", "tracking", "communication", "heading", "platoon"),
+        choices=("all", "tracking", "communication", "closed_loop", "heading", "platoon"),
         default=["all"],
         help="analysis feature to run (default: all)",
     )
@@ -30,6 +30,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--tables-only",
         action="store_true",
         help="generate tables and intermediate data without rendering figures",
+    )
+    parser.add_argument(
+        "--heading-protocol", choices=("held-out", "legacy-paper"), default=None,
+        help="heading evaluation protocol (default: manifest; legacy-paper reproduces overlapping historical metrics)",
     )
     parser.add_argument(
         "--clean",
@@ -48,5 +52,6 @@ def main(argv: list[str] | None = None) -> None:
         selected_features=args.feature,
         generate_figures=not args.tables_only,
         clean=args.clean,
+        heading_protocol=args.heading_protocol,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
