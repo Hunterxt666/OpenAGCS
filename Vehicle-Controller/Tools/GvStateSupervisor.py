@@ -31,7 +31,7 @@ class GvStateSupervisor:
             )
         self.freshness_timeout = float(freshness_timeout)
         if stale_state_hold_timeout is None:
-            stale_state_hold_timeout = max(2.0, self.freshness_timeout)
+            stale_state_hold_timeout = max(1.0, self.freshness_timeout)
         if (
             not math.isfinite(stale_state_hold_timeout)
             or stale_state_hold_timeout < self.freshness_timeout

@@ -92,7 +92,7 @@ def frame(rows: list[dict], sort_by: list[str] | None = None) -> pd.DataFrame:
     result = pd.DataFrame(rows)
     if result.empty or not sort_by:
         return result
-    return result.sort_values(sort_by).reset_index(drop=True)
+    return result.sort_values(sort_by, kind="stable").reset_index(drop=True)
 
 
 @dataclass
@@ -589,7 +589,7 @@ def deduplicate_state(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df.copy()
     return (
-        df.sort_values(["state_time_s", "line_idx"])
+        df.sort_values(["state_time_s", "line_idx"], kind="stable")
         .drop_duplicates("state_time_s", keep="last")
         .reset_index(drop=True)
     )

@@ -46,7 +46,7 @@ def centered_trajectory_speed(
         )
     trajectory = (
         trajectory.dropna(subset=["time", "x", "y"])
-        .sort_values("time")
+        .sort_values("time", kind="stable")
         .drop_duplicates("time", keep="last")
     )
     if len(trajectory) < 2:
@@ -228,15 +228,15 @@ def reconstruct_outer_loop(
     if uav.empty or ugv.empty or yaw.empty:
         raise ValueError(f"Missing response-model states in {log.path}")
     aligned = pd.merge_asof(
-        uav.sort_values("state_time_s"),
-        ugv.sort_values("ugv_pos_time_s"),
+        uav.sort_values("state_time_s", kind="stable"),
+        ugv.sort_values("ugv_pos_time_s", kind="stable"),
         left_on="state_time_s",
         right_on="ugv_pos_time_s",
         direction="backward",
     )
     aligned = pd.merge_asof(
-        aligned.sort_values("state_time_s"),
-        yaw.sort_values("ugv_yaw_time_s"),
+        aligned.sort_values("state_time_s", kind="stable"),
+        yaw.sort_values("ugv_yaw_time_s", kind="stable"),
         left_on="state_time_s",
         right_on="ugv_yaw_time_s",
         direction="backward",
@@ -377,15 +377,15 @@ def reconstruct_delayed_reference(
         }
     )
     delayed = pd.merge_asof(
-        query.sort_values("lookup_time_s"),
-        pos.sort_values("delayed_pos_time_s"),
+        query.sort_values("lookup_time_s", kind="stable"),
+        pos.sort_values("delayed_pos_time_s", kind="stable"),
         left_on="lookup_time_s",
         right_on="delayed_pos_time_s",
         direction="backward",
     )
     delayed = pd.merge_asof(
-        delayed.sort_values("lookup_time_s"),
-        yaw.sort_values("delayed_yaw_time_s"),
+        delayed.sort_values("lookup_time_s", kind="stable"),
+        yaw.sort_values("delayed_yaw_time_s", kind="stable"),
         left_on="lookup_time_s",
         right_on="delayed_yaw_time_s",
         direction="backward",
@@ -410,7 +410,7 @@ def reconstruct_delayed_reference(
 def replay_first_order(
     data: pd.DataFrame, lambda_x: float, lambda_y: float
 ) -> pd.DataFrame:
-    data = data.sort_values("state_time_s").reset_index(drop=True).copy()
+    data = data.sort_values("state_time_s", kind="stable").reset_index(drop=True).copy()
     sim_x = np.empty(len(data))
     sim_y = np.empty(len(data))
     sim_x[0] = float(data["uav_x_m"].iloc[0])
@@ -603,7 +603,7 @@ def _packet_frame(values, source: str) -> pd.DataFrame:
     frame = frame.replace([np.inf, -np.inf], np.nan).dropna()
     frame["source"] = source
     return (
-        frame.sort_values(["arrival_time_s", "state_time_s"])
+        frame.sort_values(["arrival_time_s", "state_time_s"], kind="stable")
         .reset_index(drop=True)
     )
 
@@ -862,7 +862,7 @@ def reconstruct_source_mode(
     timeout_s: float,
     slot_s: float,
 ) -> pd.DataFrame:
-    """Reproduce the source-selection rule used for the paper's Table V.
+    """Reproduce the source-selection rule used for the paper's Table III.
 
     The historical analysis works on UGV sensing timestamps. It falls back to
     LoRa only when the most recent cellular state is older than ``timeout_s``
@@ -977,7 +977,7 @@ def prepare_aligned_communication(
 
     The row time is the control-layer evaluation instant.  State age is kept
     exactly as logged in ``dt_5g`` and ``dt_lora``; no event-gap proxy is used
-    for the strict timeout-rate column in Table V.
+    for the strict timeout-rate column in Table III.
     """
     start, end = window
     if end <= start:
@@ -1002,7 +1002,7 @@ def prepare_aligned_communication(
     ].copy()
     if result.empty:
         raise ValueError("No aligned communication samples in configured window")
-    result = result.sort_values("time").reset_index(drop=True)
+    result = result.sort_values("time", kind="stable").reset_index(drop=True)
     result["dual_time"] = np.maximum(
         result["ugv_5g_time"], result["ugv_lora_time"]
     )
@@ -1064,7 +1064,7 @@ def summarize_aligned_link_performance(
     timeout_s: float,
     slot_s: float,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Reproduce Table V from control-aligned GV position streams."""
+    """Reproduce Table III from control-aligned GV position streams."""
     if slot_s <= 0.0:
         raise ValueError("slot_s must be positive")
     aligned = prepare_aligned_communication(data, window, timeout_s)
@@ -1574,7 +1574,7 @@ def analyze_heading_filters(
         raw = (
             pd.read_csv(ugv_path)
             .dropna(subset=["time", "yaw"])
-            .sort_values("time")
+            .sort_values("time", kind="stable")
             .drop_duplicates("time", keep="last")
             .reset_index(drop=True)
         )
@@ -1641,7 +1641,7 @@ def analyze_heading_filters(
 
 # Descriptive compatibility aliases retained for older analysis notebooks.
 # Paper numbering is owned by the feature modules because the current revision
-# maps communication to Table V and RTK-referenced yaw comparison to Table VII.
+# maps communication to Table III and RTK-referenced yaw comparison to Table IV.
 tracking_trial_metrics = summarize_tracking_trials
 outer_loop_response_models = fit_response_models
 delay_sensitivity_metrics = analyze_delay_sensitivity

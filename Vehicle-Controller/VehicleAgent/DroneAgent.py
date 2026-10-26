@@ -46,7 +46,7 @@ class DroneAgent:
         max_angel=180.0,
         max_z_speed=5.0,
         state_freshness_timeout=0.3,
-        stale_state_hold_timeout=2.0,
+        stale_state_hold_timeout=1.0,
         clock_skew_tolerance=0.0,
         link_heartbeat_timeout=None,
         link_failure_threshold=3,

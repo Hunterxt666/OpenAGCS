@@ -20,7 +20,7 @@ import pandas as pd
 
 from .metrics import wrap_degrees
 from .parsers import ControllerLog, deduplicate_state, parse_uav_geo_input
-from .yaw_comparison import YawComparisonResults, mark_calibration_region
+from .yaw_comparison import YawComparisonResults
 
 
 COLORS = {
@@ -355,7 +355,7 @@ def communication_panel(
     axis_pos.set_ylabel("X coordinate (m)")
 
 
-def figure_10(
+def figure_9(
     log_4g: ControllerLog, log_5g: ControllerLog, output_dir: Path
 ) -> None:
     fig, axes = plt.subplots(1, 4, figsize=(10.0, 2.8))
@@ -384,11 +384,11 @@ def figure_10(
         )
         fig.text(center, 0.01, label, ha="center", fontsize=9)
     fig.tight_layout(rect=(0, 0.06, 1, 0.9))
-    save(fig, output_dir, "figure_10_dual_mode_streams")
+    save(fig, output_dir, "figure_09_dual_mode_streams")
 
 
-def figure_10_from_updates(data: pd.DataFrame, output_dir: Path) -> None:
-    """Render Figure 10 from controller-accepted communication updates.
+def figure_9_from_updates(data: pd.DataFrame, output_dir: Path) -> None:
+    """Render Figure 9 from controller-accepted communication updates.
 
     In particular, LoRa points are successful controller fallback updates,
     rather than every LoRa packet received by the radio.
@@ -456,17 +456,17 @@ def figure_10_from_updates(data: pd.DataFrame, output_dir: Path) -> None:
         fig.text(center, 0.02, label, ha="center", fontsize=16)
 
     fig.tight_layout(rect=(0, 0.06, 1, 0.90))
-    save(fig, output_dir, "figure_10_dual_mode_streams")
+    save(fig, output_dir, "figure_09_dual_mode_streams")
 
 
 def mark_long_gaps(data: pd.DataFrame, threshold_s: float = 1.0):
-    result = data.sort_values("state_time_s").copy()
+    result = data.sort_values("state_time_s", kind="stable").copy()
     result["gap_s"] = result["state_time_s"].diff()
     result["long_gap"] = result["gap_s"] > threshold_s
     return result
 
 
-def figure_11(log: ControllerLog, output_dir: Path) -> pd.DataFrame:
+def figure_10(log: ControllerLog, output_dir: Path) -> pd.DataFrame:
     remote = mark_long_gaps(deduplicate_state(log.remote_pos))
     lora = mark_long_gaps(deduplicate_state(log.lora))
     fig, axes = plt.subplots(1, 2, figsize=(6.4, 3.0))
@@ -525,19 +525,19 @@ def figure_11(log: ControllerLog, output_dir: Path) -> pd.DataFrame:
         frameon=False,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.9))
-    save(fig, output_dir, "figure_11_single_link_gaps")
+    save(fig, output_dir, "figure_10_single_link_gaps")
     remote_out = remote.assign(source="5G")
     lora_out = lora.assign(source="LoRa")
     return pd.concat([remote_out, lora_out], ignore_index=True)
 
 
-def figure_11_from_streams(
+def figure_10_from_streams(
     cellular: pd.DataFrame,
     lora: pd.DataFrame,
     output_dir: Path,
     gap_threshold_s: float = 1.0,
 ) -> pd.DataFrame:
-    """Render Figure 11 from the full single-link position streams."""
+    """Render Figure 10 from the full single-link position streams."""
     streams = [
         mark_long_gaps(cellular, threshold_s=gap_threshold_s).assign(
             source="5G"
@@ -597,16 +597,16 @@ def figure_11_from_streams(
         frameon=False,
     )
     fig.tight_layout(rect=(0, 0.03, 1, 0.95))
-    save(fig, output_dir, "figure_11_single_link_gaps")
+    save(fig, output_dir, "figure_10_single_link_gaps")
     return pd.concat(streams, ignore_index=True)
 
 
-def figure_11_aligned(
+def figure_10_aligned(
     data: pd.DataFrame,
     output_dir: Path,
     gap_threshold_s: float = 0.3,
 ) -> pd.DataFrame:
-    """Render Figure 11 from the aligned 5G/LoRa position stream."""
+    """Render Figure 10 from the aligned 5G/LoRa position stream."""
     required = {
         "ugv_5g_time",
         "ugv_5g_x",
@@ -618,7 +618,7 @@ def figure_11_aligned(
     missing = required - set(data.columns)
     if missing:
         raise ValueError(
-            "Figure 11 requires aligned position columns: "
+            "Figure 10 requires aligned position columns: "
             + ", ".join(sorted(missing))
         )
 
@@ -636,7 +636,7 @@ def figure_11_aligned(
         stream = (
             stream.dropna()
             .drop_duplicates("state_time_s", keep="last")
-            .sort_values("state_time_s")
+            .sort_values("state_time_s", kind="stable")
         )
         streams.append(
             mark_long_gaps(stream, threshold_s=gap_threshold_s).assign(
@@ -676,7 +676,7 @@ def figure_11_aligned(
         ncol=4, frameon=False,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.9))
-    save(fig, output_dir, "figure_11_single_link_gaps")
+    save(fig, output_dir, "figure_10_single_link_gaps")
     return pd.concat(streams, ignore_index=True)
 
 
@@ -715,22 +715,22 @@ def reconstruct_communication_errors(
         }
     )
     result = pd.merge_asof(
-        uav.sort_values("state_time_s"),
-        remote_pos.sort_values("remote_pos_time_s"),
+        uav.sort_values("state_time_s", kind="stable"),
+        remote_pos.sort_values("remote_pos_time_s", kind="stable"),
         left_on="state_time_s",
         right_on="remote_pos_time_s",
         direction="backward",
     )
     result = pd.merge_asof(
-        result.sort_values("state_time_s"),
-        remote_yaw.sort_values("remote_yaw_time_s"),
+        result.sort_values("state_time_s", kind="stable"),
+        remote_yaw.sort_values("remote_yaw_time_s", kind="stable"),
         left_on="state_time_s",
         right_on="remote_yaw_time_s",
         direction="backward",
     )
     result = pd.merge_asof(
-        result.sort_values("state_time_s"),
-        lora.sort_values("lora_time_s"),
+        result.sort_values("state_time_s", kind="stable"),
+        lora.sort_values("lora_time_s", kind="stable"),
         left_on="state_time_s",
         right_on="lora_time_s",
         direction="backward",
@@ -812,10 +812,10 @@ def reconstruct_communication_errors(
     result["error_y_dual_m"] = (
         result["y_des_dual_m"] - result["uav_y_m"]
     )
-    return result.sort_values("state_time_s").reset_index(drop=True)
+    return result.sort_values("state_time_s", kind="stable").reset_index(drop=True)
 
 
-def supplementary_communication_errors(
+def figure_11(
     log: ControllerLog,
     output_dir: Path,
     leading_distance_m: float,
@@ -853,16 +853,16 @@ def supplementary_communication_errors(
         frameon=False,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.92))
-    save(fig, output_dir, "supplementary_communication_errors")
+    save(fig, output_dir, "figure_11_communication_errors")
     return data
 
 
-def supplementary_communication_errors_aligned(
+def figure_11_aligned(
     data: pd.DataFrame,
     output_dir: Path,
     timeout_s: float = 0.3,
 ) -> pd.DataFrame:
-    """Render an unnumbered supplementary communication-error diagnostic."""
+    """Render Figure 11 from the released aligned position-error columns."""
     required = {
         "time",
         "err_x_5g",
@@ -876,7 +876,7 @@ def supplementary_communication_errors_aligned(
     missing = required - set(data.columns)
     if missing:
         raise ValueError(
-            "Supplementary communication-error diagnostic requires columns: "
+            "Figure 11 requires aligned error columns: "
             + ", ".join(sorted(missing))
         )
     result = data.copy()
@@ -922,16 +922,16 @@ def supplementary_communication_errors_aligned(
         ncol=3, frameon=False,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.92))
-    save(fig, output_dir, "supplementary_communication_errors")
+    save(fig, output_dir, "figure_11_communication_errors")
     return result
 
 
-def supplementary_communication_errors_from_reconstruction(
+def figure_11_from_reconstruction(
     data: pd.DataFrame,
     output_dir: Path,
     window_s: tuple[float, float] = (100.0, 540.0),
 ) -> pd.DataFrame:
-    """Render an unnumbered supplementary forward-lead error diagnostic."""
+    """Render Figure 11 from the corrected forward-lead reconstruction."""
     fig, axes = plt.subplots(2, 1, figsize=(7.0, 4.0), sharex=True)
     labels = [
         ("5g", "5G-only error", COLORS["uav"], 3.5, 2),
@@ -972,11 +972,11 @@ def supplementary_communication_errors_from_reconstruction(
         frameon=False,
     )
     fig.tight_layout(rect=(0, 0.03, 1, 0.95))
-    save(fig, output_dir, "supplementary_communication_errors")
+    save(fig, output_dir, "figure_11_communication_errors")
     return data
 
 
-def figure_14(results: YawComparisonResults, output_dir: Path) -> None:
+def figure_12(results: YawComparisonResults, output_dir: Path) -> None:
     """Plot the four-trial yaw comparison used by the revised paper.
 
     The RTK course is an independent reference shown only where the vehicle is
@@ -1030,7 +1030,6 @@ def figure_14(results: YawComparisonResults, output_dir: Path) -> None:
     plotted_axes = []
     for index, (_, data) in enumerate(list(results.series.items())[:4]):
         axis = axes[index]
-        mark_calibration_region(axis, data)
         plotted_axes.append(axis)
         for column, label, color, style, width, alpha, zorder in styles:
             axis.plot(
@@ -1081,7 +1080,7 @@ def figure_14(results: YawComparisonResults, output_dir: Path) -> None:
 
     fig.tight_layout()
     fig.subplots_adjust(top=0.80)
-    save(fig, output_dir, "figure_14_heading_filters")
+    save(fig, output_dir, "figure_12_heading_filters")
 
 
 def generate_all_figures(
@@ -1098,16 +1097,16 @@ def generate_all_figures(
     figure_6(representative, output_dir)
     figure_7(representative, output_dir)
     figure_8_audit = figure_8(representative, output_dir)
-    figure_10(communication_4g, communication_5g, output_dir)
-    figure_11_audit = figure_11(communication_5g, output_dir)
-    supplementary_communication_error_audit = supplementary_communication_errors(
+    figure_9(communication_4g, communication_5g, output_dir)
+    figure_10_audit = figure_10(communication_5g, output_dir)
+    figure_11_audit = figure_11(
         communication_5g,
         output_dir,
         leading_distance_m,
     )
-    figure_14(heading_results, output_dir)
+    figure_12(heading_results, output_dir)
     return {
         "figure_08_error_series": figure_8_audit,
-        "figure_11_gap_markers": figure_11_audit,
-        "supplementary_communication_error_series": supplementary_communication_error_audit,
+        "figure_10_gap_markers": figure_10_audit,
+        "figure_11_error_series": figure_11_audit,
     }

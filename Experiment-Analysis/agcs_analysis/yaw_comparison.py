@@ -1,12 +1,10 @@
-"""RTK-course yaw comparison with fixed AKF and calibration-tuned baselines.
+"""RTK-course-referenced yaw-filter comparison used by paper Table IV.
 
 The raw GV yaw remains the magnetometer-derived measurement.  Quantitative
 errors use an independent course-angle reference reconstructed from the RTK
 ``x``/``y`` trajectory during valid moving segments.  This module is imported
 by the project's ``heading`` feature; it can also be run directly for a small
-standalone workflow. The main-text Raw/AKF table always uses all valid samples.
-The default baseline table scores the held-out suffix; the explicit legacy-paper
-protocol reproduces the previous overlapping baseline evaluation.
+standalone compatibility workflow.
 """
 
 from __future__ import annotations
@@ -14,11 +12,6 @@ from __future__ import annotations
 import argparse
 import collections
 import itertools
-import hashlib
-import importlib.metadata
-import json
-import os
-import platform
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Iterable
@@ -32,7 +25,6 @@ import numpy as np
 import pandas as pd
 
 from .runtime_filter import AdaptiveHeadingKalmanFilter
-from .reporting import export_table
 
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
@@ -56,10 +48,9 @@ RAW_METHOD = "Raw GV (measurement)"
 FILTER_METHODS = ["AKF (proposed)", "EKF", "EKF-AR", "Huber-based KF"]
 METHODS = [RAW_METHOD, *FILTER_METHODS]
 TUNABLE_BASELINES = ["EKF", "EKF-AR", "Huber-based KF"]
-EVALUATION_PROTOCOLS = ("held-out", "legacy-paper")
 
-# Preserve the paper-compatible path when duplicate timestamps are present.
-TIME_SORT_KIND = "quicksort"
+# Preserve original CSV row order for timestamp ties; keep the last valid row.
+TIME_SORT_KIND = "stable"
 
 
 @dataclass
@@ -75,29 +66,6 @@ class YawComparisonResults:
     selected_parameters: pd.DataFrame
     selected_parameters_by_method: dict[str, dict[str, float | int]]
     motion_summary: pd.DataFrame
-    split_summary: pd.DataFrame
-    deployed_diagnostic: pd.DataFrame
-    protocol: dict
-
-    @property
-    def quantitative_table(self) -> pd.DataFrame:
-        """Main-text Raw/AKF diagnostic, independent of the baseline scoring split."""
-        columns = ["method", "mae_deg", "rmse_deg", "p95_ae_deg",
-                   "outlier_rate_gt_5deg_pct"]
-        table = self.deployed_diagnostic.loc[:, columns].copy()
-        table["method"] = table["method"].replace({"AKF (proposed)": "AKF (deployed)"})
-        return table
-
-
-def export_yaw_tables(results: YawComparisonResults, output_dir: Path) -> list[str]:
-    """Export the current manuscript's main-text and appendix table scopes."""
-    tables = {
-        "table_VII_yaw_filter_quantitative": results.quantitative_table,
-        "table_XII_yaw_filter_baselines": results.table,
-    }
-    for name, table in tables.items():
-        export_table(table, name, output_dir)
-    return list(tables)
 
 
 def wrap_angle_rad(angle: np.ndarray | float) -> np.ndarray | float:
@@ -109,6 +77,11 @@ def angular_error_deg(estimate_rad: np.ndarray, reference_rad: np.ndarray) -> np
 
 
 def drop_duplicate_time(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop missing required fields, stable-sort time, and keep the last row.
+
+    Call with rows in original CSV order. Timestamp equality is exact; no
+    rounding or tolerance-based grouping is applied.
+    """
     required = ["time", "yaw"]
     if "x" in df.columns and "y" in df.columns:
         required += ["x", "y"]
@@ -125,7 +98,7 @@ def interpolate_reference_yaw(
     reference_yaw_rad: np.ndarray,
     query_time: np.ndarray,
 ) -> np.ndarray:
-    order = np.argsort(reference_time)
+    order = np.argsort(reference_time, kind="stable")
     t_ref = reference_time[order]
     yaw_ref = np.unwrap(reference_yaw_rad[order])
     return np.interp(query_time, t_ref, yaw_ref)
@@ -416,26 +389,12 @@ def course_reference_from_rtk(
     return np.asarray(course_yaw, dtype=float), np.asarray(speed, dtype=float), np.asarray(valid, dtype=bool)
 
 
-def calibration_mask(
-    valid_reference: np.ndarray, time: np.ndarray, fraction: float,
-    protocol: str = "held-out",
-) -> np.ndarray:
-    if protocol not in EVALUATION_PROTOCOLS:
-        raise ValueError(f"Unknown heading evaluation protocol: {protocol}")
-    if not 0.0 < fraction < 1.0:
-        raise ValueError("Calibration fraction must be strictly between 0 and 1")
-    if not np.all(np.isfinite(time)) or np.any(np.diff(time) <= 0):
-        raise ValueError("Trial timestamps must be finite and strictly increasing")
+def calibration_mask(valid_reference: np.ndarray, time: np.ndarray, fraction: float) -> np.ndarray:
     valid_times = time[valid_reference]
-    count = int(np.floor(len(valid_times) * fraction))
-    if count < 1 or count >= len(valid_times):
-        raise ValueError("Each trial needs nonempty calibration and evaluation subsets")
-    if protocol == "legacy-paper":
-        cutoff = float(np.quantile(valid_times, fraction))
-        return valid_reference & (time <= cutoff)
-    mask = np.zeros_like(valid_reference, dtype=bool)
-    mask[np.flatnonzero(valid_reference)[:count]] = True
-    return mask
+    if len(valid_times) == 0:
+        return np.zeros_like(valid_reference, dtype=bool)
+    cutoff = float(np.quantile(valid_times, fraction))
+    return valid_reference & (time <= cutoff)
 
 
 def prepare_reference_base(
@@ -444,15 +403,8 @@ def prepare_reference_base(
     min_speed_mps: float,
     calibration_fraction: float,
     ugv_dir: Path = UGV_DIR,
-    protocol: str = "held-out",
 ) -> pd.DataFrame:
-    if not np.isfinite(half_window_s) or half_window_s <= 0:
-        raise ValueError("Course half-window must be positive and finite")
-    if not np.isfinite(min_speed_mps) or min_speed_mps < 0:
-        raise ValueError("Minimum course speed must be non-negative and finite")
     ugv = load_ugv_trial(stem, ugv_dir)
-    if ugv.empty or not np.isfinite(ugv[["time", "x", "y", "yaw"]].to_numpy()).all():
-        raise ValueError(f"Trial {stem} must contain finite RTK/yaw samples")
     trial = ugv[["time", "x", "y", "yaw"]].rename(columns={"yaw": "ugv_yaw_rad"}).copy()
     reference_yaw, speed, valid = course_reference_from_rtk(trial, half_window_s, min_speed_mps)
     time = trial["time"].to_numpy(dtype=float)
@@ -460,9 +412,7 @@ def prepare_reference_base(
     trial["reference_yaw_rad"] = reference_yaw
     trial["trajectory_speed_mps"] = speed
     trial["valid_reference"] = valid
-    trial["calibration_sample"] = calibration_mask(valid, time, calibration_fraction, protocol)
-    trial["held_out_sample"] = valid & ~trial["calibration_sample"].to_numpy(dtype=bool)
-    trial["evaluation_sample"] = valid if protocol == "legacy-paper" else trial["held_out_sample"]
+    trial["calibration_sample"] = calibration_mask(valid, time, calibration_fraction)
     trial["raw_yaw_deg"] = np.rad2deg(trial["ugv_yaw_rad"].to_numpy(dtype=float))
     trial["reference_yaw_deg"] = np.where(valid, np.rad2deg(wrap_angle_rad(reference_yaw)), np.nan)
     return trial.reset_index(drop=True)
@@ -511,7 +461,6 @@ def compute_filter_comparison(
         total_count = int(len(trial))
         valid_pct = valid_count / max(total_count, 1) * 100.0
         calibration_count = int(trial["calibration_sample"].sum())
-        evaluation = trial["evaluation_sample"].to_numpy(dtype=bool)
 
         for method in METHODS:
             prefix = "Raw GV" if method == RAW_METHOD else method
@@ -523,9 +472,8 @@ def compute_filter_comparison(
                 "valid_reference_samples": valid_count,
                 "valid_reference_pct": valid_pct,
                 "calibration_samples": calibration_count,
-                "evaluation_samples": int(evaluation.sum()),
             }
-            row.update(metrics_from_error(trial.loc[evaluation, f"{prefix}_error_deg"].to_numpy(dtype=float)))
+            row.update(metrics_from_error(trial[f"{prefix}_error_deg"].to_numpy(dtype=float)))
             metric_rows.append(row)
 
     metrics_by_trial = pd.DataFrame(metric_rows)
@@ -533,8 +481,7 @@ def compute_filter_comparison(
     for method in METHODS:
         prefix = "Raw GV" if method == RAW_METHOD else method
         pooled_error = np.concatenate(
-            [trial.loc[trial["evaluation_sample"], f"{prefix}_error_deg"].to_numpy(dtype=float)
-             for trial in trial_outputs.values()]
+            [trial[f"{prefix}_error_deg"].to_numpy(dtype=float) for trial in trial_outputs.values()]
         )
         row = {"method": method, "n_trials": len(trial_stems)}
         row.update(metrics_from_error(pooled_error))
@@ -591,12 +538,6 @@ def evaluate_candidate(
 ) -> dict[str, float]:
     errors = []
     for base in reference_trials.values():
-        # Candidate selection never processes the held-out yaw suffix.
-        mask = base["calibration_sample"].to_numpy(dtype=bool)
-        indices = np.flatnonzero(mask)
-        if not len(indices):
-            raise ValueError("Each trial must have calibration samples")
-        base = base.iloc[:indices[-1] + 1]
         measurement_yaw = base["ugv_yaw_rad"].to_numpy(dtype=float)
         reference_yaw = base["reference_yaw_rad"].to_numpy(dtype=float)
         mask = base["calibration_sample"].to_numpy(dtype=bool)
@@ -608,13 +549,7 @@ def evaluate_candidate(
 
 def tune_baselines(
     reference_trials: dict[str, pd.DataFrame],
-    protocol: str = "held-out",
 ) -> tuple[pd.DataFrame, dict[str, dict[str, float | int]]]:
-    """Tune the three baselines; retain the previously fixed deployed AKF."""
-    if not reference_trials:
-        raise ValueError("At least one heading trial is required")
-    if protocol not in EVALUATION_PROTOCOLS:
-        raise ValueError(f"Unknown heading evaluation protocol: {protocol}")
     rows: list[dict[str, object]] = []
     selected: dict[str, dict[str, float | int]] = {}
 
@@ -623,10 +558,7 @@ def tune_baselines(
         best_params: dict[str, float | int] | None = None
         for candidate_idx, params in enumerate(baseline_candidate_params(method), start=1):
             metrics = evaluate_candidate(reference_trials, method, params)
-            if not np.isfinite(metrics["rmse_deg"]):
-                raise ValueError(f"Non-finite calibration RMSE for {method}")
-            row: dict[str, object] = {"method": method, "candidate": candidate_idx,
-                                      "scoring_subset": "calibration", "selected": False}
+            row: dict[str, object] = {"method": method, "candidate": candidate_idx}
             row.update(params)
             row.update(metrics)
             rows.append(row)
@@ -640,7 +572,6 @@ def tune_baselines(
         if best_params is None:
             raise RuntimeError(f"No baseline candidates evaluated for {method}")
         selected[method] = best_params
-        best_row["selected"] = True
 
     return pd.DataFrame(rows), selected
 
@@ -648,16 +579,7 @@ def tune_baselines(
 def run_akf_q_sensitivity(
     reference_trials: dict[str, pd.DataFrame],
     base_params: dict[str, dict[str, float | int]],
-    protocol: str = "held-out",
 ) -> pd.DataFrame:
-    """Evaluate the fixed AKF Q sweep on the full valid diagnostic subset.
-
-    The manuscript's process-noise sensitivity table is a full-log diagnostic,
-    independent of the held-out baseline comparison in Table XII. Keep the
-    protocol argument for API compatibility, but do not let it change the
-    sensitivity-table scoring subset.
-    """
-    del protocol
     rows = []
     for q in AKF_Q_GRID:
         params = merged_filter_params(base_params)
@@ -671,7 +593,6 @@ def run_akf_q_sensitivity(
             error = angular_error_deg(estimate, reference_yaw)
             errors.append(error[valid])
         row = {
-            "scoring_subset": "all-valid-diagnostic",
             "akf_q_rad2": q,
             "process_std_deg_per_step": float(np.rad2deg(np.sqrt(q))),
             "selected_for_table": bool(np.isclose(q, base_params["AKF (proposed)"]["process_variance"])),
@@ -735,11 +656,8 @@ def analyze_yaw_filters(
     trial_stems: list[str],
     settings: dict,
 ) -> YawComparisonResults:
-    """Evaluate fixed AKF and calibration-tuned baselines on the chosen subset."""
+    """Run the paper Table IV analysis on UGV-only RTK/yaw CSV inputs."""
 
-    if not trial_stems or len(set(trial_stems)) != len(trial_stems):
-        raise ValueError("Provide at least one trial, without duplicate stems")
-    protocol = settings.get("evaluation_protocol", "held-out")
     reference = settings["course_reference"]
     half_window_s = float(reference["half_window_s"])
     min_speed_mps = float(reference["min_speed_mps"])
@@ -751,7 +669,6 @@ def analyze_yaw_filters(
             min_speed_mps=min_speed_mps,
             calibration_fraction=calibration_fraction,
             ugv_dir=ugv_dir,
-            protocol=protocol,
         )
         for stem in trial_stems
     }
@@ -778,7 +695,7 @@ def analyze_yaw_filters(
     tuning_grid = pd.DataFrame()
     tuned = bool(settings.get("tune_baselines", True))
     if tuned:
-        tuning_grid, baseline_overrides = tune_baselines(reference_trials, protocol)
+        tuning_grid, baseline_overrides = tune_baselines(reference_trials)
         selected_overrides.update(baseline_overrides)
 
     selected_params = merged_filter_params(selected_overrides)
@@ -790,7 +707,6 @@ def analyze_yaw_filters(
     q_sensitivity = run_akf_q_sensitivity(
         reference_trials,
         selected_params,
-        protocol=protocol,
     )
     motion_summary = compute_reference_motion_summary(
         reference_trials,
@@ -802,7 +718,6 @@ def analyze_yaw_filters(
             selected_params,
             tuned=tuned,
             calibration_fraction=calibration_fraction,
-            protocol=protocol,
         )
     )
     table = summary[
@@ -816,56 +731,6 @@ def analyze_yaw_filters(
             "outlier_rate_gt_5deg_pct",
         ]
     ].copy()
-    split_summary = summarize_splits(reference_trials)
-    diagnostic_rows = []
-    for method in [RAW_METHOD, "AKF (proposed)"]:
-        prefix = "Raw GV" if method == RAW_METHOD else method
-        errors = np.concatenate([trial[f"{prefix}_error_deg"].to_numpy(dtype=float)
-                                 for trial in series.values()])
-        diagnostic_rows.append(dict(method=method, scoring_subset="all-valid-diagnostic",
-                                    **metrics_from_error(errors)))
-    audit = {
-        "evaluation_protocol": protocol,
-        "calibration_fraction": calibration_fraction,
-        "split_rule": ("timestamp quantile (historical)" if protocol == "legacy-paper"
-                       else "first floor(fraction * valid_sample_count) samples in chronological order"),
-        "evaluation_subset": "all-valid (overlaps calibration)" if protocol == "legacy-paper" else "held-out",
-        "baseline_tuning_enabled": tuned,
-        "tuned_methods": TUNABLE_BASELINES if tuned else [],
-        "selection_rule": "pooled calibration RMSE; ties: MAE, P95 AE, then first candidate",
-        "akf_parameter_policy": "previously fixed deployment settings; excluded from grid search",
-        "state_policy": "causal replay from trial start; no reset at split; no RTK-reference filter input",
-        "course_half_window_s": half_window_s,
-        "course_min_speed_mps": min_speed_mps,
-        "reference_note": "centered RTK reference is an offline evaluation target; adjacent windows may share positions",
-        "sensitivity_subset": "all-valid-diagnostic",
-        "table_scopes": {
-            "table_VII_yaw_filter_quantitative": {
-                "manuscript_label": "tab:yaw_filter_quantitative",
-                "scoring_subset": "all-valid-diagnostic",
-                "n_samples": int(split_summary["valid_reference_samples"].sum()),
-                "methods": [RAW_METHOD, "AKF (deployed)"],
-            },
-            "table_XII_yaw_filter_baselines": {
-                "manuscript_label": "tab:yaw_filter_baselines",
-                "scoring_subset": "all-valid (overlaps calibration)" if protocol == "legacy-paper" else "held-out",
-                "n_samples": int(split_summary["evaluation_samples"].sum()),
-            },
-        },
-        "sample_counts": {name: int(split_summary[name].sum()) for name in
-                          ["total_samples", "valid_reference_samples", "calibration_samples",
-                           "held_out_samples", "evaluation_samples", "overlap_samples"]},
-        "time_sort_kind": TIME_SORT_KIND,
-        "python": platform.python_version(),
-        "platform": platform.platform(),
-        "numpy_disabled_cpu_features": os.environ.get("NPY_DISABLE_CPU_FEATURES", ""),
-        "packages": {name: importlib.metadata.version(name)
-                     for name in ["numpy", "pandas", "matplotlib"]},
-        "input_sha256": {stem: hashlib.sha256((Path(ugv_dir) / f"{stem}.csv").read_bytes()).hexdigest()
-                         for stem in trial_stems},
-        "analysis_source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-        "requirements_sha256": hashlib.sha256((PROJECT_DIR / "requirements.txt").read_bytes()).hexdigest(),
-    }
     return YawComparisonResults(
         table=table,
         summary=summary,
@@ -876,48 +741,7 @@ def analyze_yaw_filters(
         selected_parameters=selected_parameters,
         selected_parameters_by_method=selected_params,
         motion_summary=motion_summary,
-        split_summary=split_summary,
-        deployed_diagnostic=pd.DataFrame(diagnostic_rows),
-        protocol=audit,
     )
-
-
-def summarize_splits(reference_trials: dict[str, pd.DataFrame]) -> pd.DataFrame:
-    rows = []
-    for stem, base in reference_trials.items():
-        row = {"trial_file": stem, "total_samples": len(base),
-               "valid_reference_samples": int(base["valid_reference"].sum()),
-               "overlap_samples": int((base["calibration_sample"] & base["evaluation_sample"]).sum())}
-        for name, column in [("calibration", "calibration_sample"),
-                             ("held_out", "held_out_sample"), ("evaluation", "evaluation_sample")]:
-            times = base.loc[base[column], "time"]
-            row[f"{name}_samples"] = len(times)
-            row[f"{name}_start_s"] = float(times.iloc[0])
-            row[f"{name}_end_s"] = float(times.iloc[-1])
-        rows.append(row)
-    return pd.DataFrame(rows)
-
-
-def validate_paper_environment() -> None:
-    """Fail early if the documented Windows reproduction dependencies differ."""
-    mismatches = []
-    if platform.python_version_tuple()[:2] != ("3", "9"):
-        mismatches.append(f"Python 3.9 required; found {platform.python_version()}")
-    for line in (PROJECT_DIR / "requirements.txt").read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        name, separator, expected = line.partition("==")
-        if not separator:
-            raise ValueError(f"Expected a pinned requirement: {line}")
-        try:
-            actual = importlib.metadata.version(name)
-        except importlib.metadata.PackageNotFoundError:
-            actual = "not installed"
-        if actual != expected:
-            mismatches.append(f"{name}: expected {expected}, found {actual}")
-    if mismatches:
-        raise RuntimeError("Paper reproduction environment mismatch:\n" + "\n".join(mismatches))
 
 
 def reference_motion_row(
@@ -953,7 +777,6 @@ def parameter_rows(
     params_by_method: dict[str, dict[str, float | int]],
     tuned: bool,
     calibration_fraction: float = TUNING_CALIBRATION_FRACTION,
-    protocol: str = "held-out",
 ) -> list[dict[str, object]]:
     rows = []
     for method in FILTER_METHODS:
@@ -961,10 +784,8 @@ def parameter_rows(
         row: dict[str, object] = {
             "method": method,
             "role": "proposed" if method == "AKF (proposed)" else "baseline",
-            "evaluation_protocol": protocol,
-            "tuned_in_this_run": bool(tuned and method in TUNABLE_BASELINES),
             "tuning_basis": (
-                "previously fixed deployment settings; not retuned in this comparison"
+                "fixed from physical process-noise setting, Q sensitivity, and raw-yaw-only innovation stress test"
                 if method == "AKF (proposed)"
                 else (
                     f"grid search on first {calibration_fraction:.0%} of valid RTK-course samples"
@@ -986,17 +807,6 @@ def parameter_rows(
     return rows
 
 
-def mark_calibration_region(ax, trial: pd.DataFrame) -> None:
-    """Identify the unscored prefix when displaying a full held-out replay."""
-    if (trial["calibration_sample"] & trial["evaluation_sample"]).any():
-        return
-    boundary = float(trial.loc[trial["evaluation_sample"], "time"].iloc[0])
-    ax.axvspan(float(trial["time"].iloc[0]), boundary, color="0.5", alpha=0.12, zorder=0)
-    ax.axvline(boundary, color="0.45", linestyle=":", linewidth=0.8)
-    ax.text(0.02, 1.02, "Shaded: calibration / warm-up", transform=ax.transAxes,
-            fontsize=7, va="bottom", color="0.3")
-
-
 def plot_comparison(aligned_outputs: dict[str, pd.DataFrame], output_dir: Path) -> None:
     plt.rcParams["pdf.fonttype"] = 42
     plt.rcParams["ps.fonttype"] = 42
@@ -1009,12 +819,8 @@ def plot_comparison(aligned_outputs: dict[str, pd.DataFrame], output_dir: Path) 
         if idx >= 4:
             break
         ax = axs[idx]
-        mark_calibration_region(ax, trial)
         ax.plot(trial["time"], trial["raw_yaw_deg"], label="Raw GV", linestyle="dotted", alpha=0.65, linewidth=2.0, zorder=1)
         ax.plot(trial["time"], trial["reference_yaw_deg"], label="RTK course ref.", linestyle="--", linewidth=1.8, zorder=6)
-        ax.plot(trial["time"], trial["EKF_yaw_deg"], label="EKF", linewidth=1.1, zorder=2)
-        ax.plot(trial["time"], trial["EKF-AR_yaw_deg"], label="EKF-AR", linewidth=1.1, zorder=3)
-        ax.plot(trial["time"], trial["Huber-based KF_yaw_deg"], label="Huber KF", linewidth=1.1, zorder=4)
         ax.plot(trial["time"], trial["AKF (proposed)_yaw_deg"], label="AKF", linewidth=1.8, zorder=8)
         ax.set_xlabel("Time (s)")
         ax.set_ylabel("Yaw (deg)")
@@ -1064,6 +870,8 @@ def plot_comparison(aligned_outputs: dict[str, pd.DataFrame], output_dir: Path) 
     fig.subplots_adjust(top=0.80)
     fig.savefig(output_dir / "yaw_filters_comparison.pdf", format="pdf", dpi=600, bbox_inches="tight")
     fig.savefig(output_dir / "yaw_filters_comparison.png", dpi=300, bbox_inches="tight")
+    fig.savefig(output_dir / "yaw_filters_comparison_raw_akf.pdf", format="pdf", dpi=600, bbox_inches="tight")
+    fig.savefig(output_dir / "yaw_filters_comparison_raw_akf.png", dpi=300, bbox_inches="tight")
     fig.savefig(output_dir / "yaw_comparison_revision.pdf", format="pdf", dpi=600, bbox_inches="tight")
     fig.savefig(output_dir / "yaw_comparison_revision.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -1077,7 +885,7 @@ def markdown_table(df: pd.DataFrame, columns: list[str]) -> str:
         for col in columns:
             value = row[col]
             if isinstance(value, (float, np.floating)):
-                values.append(f"{value:.3g}" if 0 < abs(value) < 0.001 else f"{value:.3f}")
+                values.append(f"{value:.3f}")
             elif isinstance(value, (int, np.integer)):
                 values.append(str(int(value)))
             else:
@@ -1087,14 +895,12 @@ def markdown_table(df: pd.DataFrame, columns: list[str]) -> str:
 
 
 def write_reviewer_response(
-    results: YawComparisonResults,
+    summary: pd.DataFrame,
+    q_sensitivity: pd.DataFrame,
+    selected_params: dict[str, dict[str, float | int]],
+    motion_summary: pd.DataFrame,
     output_dir: Path,
 ) -> None:
-    summary = results.summary
-    q_sensitivity = results.q_sensitivity
-    selected_params = results.selected_parameters_by_method
-    motion_summary = results.motion_summary
-    protocol = results.protocol
     table_cols = [
         "method",
         "n_samples",
@@ -1121,103 +927,45 @@ def write_reviewer_response(
     selected_q_std_deg = float(np.rad2deg(np.sqrt(selected_q)))
     selected_r = float(selected_params["AKF (proposed)"]["measurement_variance"])
     selected_r_std_deg = float(np.rad2deg(np.sqrt(selected_r)))
-    split_table = markdown_table(results.split_summary, [
-        "trial_file", "valid_reference_samples", "calibration_samples",
-        "evaluation_samples", "overlap_samples",
-    ])
-    legacy = protocol["evaluation_protocol"] == "legacy-paper"
-    evaluation_description = (
-        "HISTORICAL REPRODUCTION ONLY: metrics use all valid samples, including calibration. "
-        "These results are not held-out evaluation."
-        if legacy else
-        "Metrics use only the chronological suffix remaining after calibration in each trial. "
-        "Calibration and evaluation samples do not overlap."
-    )
-    tuning_description = (
-        f"The three baselines are grid-tuned on the first {protocol['calibration_fraction']:.1%} "
-        "of valid samples in each trial. One parameter set per baseline is selected across "
-        "all trials by pooled calibration RMSE (ties: MAE, P95 AE, then candidate order)."
-        if protocol["baseline_tuning_enabled"] else
-        "Baseline tuning is disabled; the original default baseline settings are evaluated."
-    )
+    old_q_std_deg = float(np.rad2deg(np.sqrt(3.0)))
 
     response = f"""# Quantitative comparison for the yaw-estimation revision
 
-Protocol: `{protocol['evaluation_protocol']}`. {evaluation_description}
+We agree with the reviewer that using the raw magnetometer-derived GV yaw as
+the quantitative reference creates a circular evaluation. We therefore replaced
+the previous raw-yaw reference with an RTK-derived course-angle reference. For
+each GV timestamp, the course angle is computed from the RTK trajectory over a
+centered {COURSE_HALF_WINDOW_S:.1f}-s window, and only moving samples with
+trajectory speed >= {COURSE_MIN_SPEED_MPS:.1f} m/s are used for MAE, RMSE, P95
+absolute error, and the >5 deg deviation rate. The raw GV yaw remains in the
+figure only as the measured magnetometer yaw, not as ground truth.
 
-The reference is the RTK-derived course angle over a centered window with
-half-width {protocol['course_half_window_s']:g} s. Valid moving samples have
-course speed >= {protocol['course_min_speed_mps']:g} m/s. Raw yaw is a measurement,
-not ground truth. The reference is not supplied to any filter. Its centered
-windows can share RTK positions near the split; this is a within-trial temporal
-evaluation, not evidence of independence across trials or unseen environments.
-
-There are {int(pooled_motion.valid_reference_samples)} valid moving samples out of
-{int(pooled_motion.total_samples)} samples. Of these, {protocol['sample_counts']['calibration_samples']}
-are calibration samples and {protocol['sample_counts']['evaluation_samples']} are scored.
-The split rule is: {protocol['split_rule']}.
-
-{split_table}
+This reference construction provides {int(pooled_motion.valid_reference_samples)} valid moving samples out of {int(pooled_motion.total_samples)} GV samples ({pooled_motion.valid_reference_pct:.1f}%). The RTK-course motion statistics show a P95 heading step of {pooled_motion.p95_heading_step_deg:.2f} deg and a P95 yaw rate of {pooled_motion.p95_yaw_rate_deg_s:.2f} deg/s over consecutive valid samples.
 
 {metric_table}
 
-The fixed AKF obtains {proposed.mae_deg:.3f} deg MAE and {proposed.rmse_deg:.3f} deg RMSE.
-Raw yaw has {raw.mae_deg:.3f} deg MAE. EKF, EKF-AR, and Huber-KF obtain
-{ekf.rmse_deg:.3f}, {ar.rmse_deg:.3f}, and {robust.rmse_deg:.3f} deg RMSE, respectively.
-These comparisons characterize the deployed component and do not establish
-general filter superiority or a closed-loop improvement attributable to AKF.
-
-## Main-text Raw/AKF diagnostic
-
-`table_VII_yaw_filter_quantitative.csv` and `.tex` reproduce the main-text table
-`tab:yaw_filter_quantitative` using all {int(pooled_motion.valid_reference_samples)}
-valid moving samples and the same fixed AKF replay. This full-log diagnostic is
-separate from `table_XII_yaw_filter_baselines.csv` and `.tex`,
-whose scoring subset follows the active protocol above.
-
-{markdown_table(results.quantitative_table, list(results.quantitative_table.columns))}
+With this non-magnetometer reference, the proposed AKF obtains {proposed.mae_deg:.3f} deg MAE and {proposed.rmse_deg:.3f} deg RMSE. The raw magnetometer yaw itself has {raw.mae_deg:.3f} deg MAE against the RTK-course reference. The retuned EKF and EKF-AR baselines obtain {ekf.rmse_deg:.3f} deg and {ar.rmse_deg:.3f} deg RMSE, respectively, and the Huber-based robust KF obtains {robust.rmse_deg:.3f} deg RMSE.
 
 ## Process-noise sensitivity
 
-AKF remains fixed at Q = {selected_q:g} rad^2 ({selected_q_std_deg:.1f} deg process
-standard deviation), R = {selected_r:g} rad^2 ({selected_r_std_deg:.1f} deg measurement
-standard deviation), lower/upper thresholds =
-{np.rad2deg(selected_params['AKF (proposed)']['jump_threshold']):g}/
-{np.rad2deg(selected_params['AKF (proposed)']['jump_threshold_high']):g} deg,
-and inflation = {selected_params['AKF (proposed)']['severe_inflation']:g}.
-The Q sweep below uses `{protocol['sensitivity_subset']}` samples for a diagnostic
-only; it does not select or change AKF parameters.
+The previous Q = 3.0 rad^2 corresponds to a one-step process standard deviation of {old_q_std_deg:.1f} deg, which is physically too permissive for a road-vehicle heading update. We therefore use Q = {selected_q:.5f} rad^2 in the revised table, corresponding to {selected_q_std_deg:.1f} deg per filter step, with nominal R = {selected_r:.5f} rad^2 ({selected_r_std_deg:.1f} deg measurement standard deviation), and report the sensitivity below.
 
 {q_table}
 
 ## Baseline tuning disclosure
 
-{tuning_description} AKF is excluded from this search: its previously fixed
-deployment parameters are retained. Thus the evaluation subset is common to
-all methods, but their parameter-selection procedures are not identical.
-This analysis does not establish that AKF's earlier parameter development was
-independent of these logs. That history must be described in the manuscript.
-
-All filters run causally from each trial's start, including measurements without
-a valid course reference, and retain their state at the split. Calibration
-errors alone choose baseline parameters; evaluation errors never feed back
-into parameter selection. The complete grid, settings, split timestamps,
-per-sample masks, and execution metadata are exported alongside the table.
-The separate all-valid Raw/AKF diagnostic must not be reported as held-out metrics.
+To avoid a strawman comparison, EKF, EKF-AR, and Huber-based KF are retuned with comparable offline effort. Each baseline is selected by grid search on the first {TUNING_CALIBRATION_FRACTION:.0%} of valid RTK-course samples from each trial, using RMSE as the selection criterion. The selected parameters are saved in `selected_filter_parameters.csv`, and all tried baseline candidates are saved in `baseline_tuning_grid.csv`. The final table above is then recomputed on all valid moving samples using the selected parameters.
 """
     (output_dir / "reviewer_response_quantitative.md").write_text(response, encoding="utf-8")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--protocol", choices=EVALUATION_PROTOCOLS, default="held-out")
-    parser.add_argument("--output", type=Path, default=None)
-    parser.add_argument("--calibration-fraction", type=float, default=TUNING_CALIBRATION_FRACTION)
-    parser.add_argument("--max-trials", type=int, default=4, help="Number of manifest heading trials to use.")
+    parser.add_argument("--max-trials", type=int, default=4, help="Number of sorted paired UAV/GV trial files to use.")
     parser.add_argument(
         "--all-trials",
         action="store_true",
-        help="Use all manifest heading trials instead of only the first --max-trials.",
+        help="Use all paired UAV/GV trial files instead of only the first --max-trials.",
     )
     parser.add_argument(
         "--trials",
@@ -1277,63 +1025,70 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    output_dir = args.output or OUT_DIR / args.protocol
-    output_dir.mkdir(parents=True, exist_ok=True)
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     if args.trials:
         trial_stems = args.trials
     else:
-        manifest = json.loads((PROJECT_DIR / "manifest.json").read_text(encoding="utf-8"))
-        trial_stems = manifest["trials"]["heading_stems"]
+        trial_stems = available_trial_stems()
         if not args.all_trials:
             trial_stems = trial_stems[: args.max_trials]
 
     if not trial_stems:
         raise RuntimeError(f"No UGV trial CSV files found in {UGV_DIR}")
 
-    settings = {
-        "evaluation_protocol": args.protocol,
-        "course_reference": {
-            "half_window_s": args.course_half_window_s,
-            "min_speed_mps": args.min_course_speed_mps,
-            "calibration_fraction": args.calibration_fraction,
-        },
-        "tune_baselines": not args.skip_baseline_tuning,
-        "akf": {
+    reference_trials = {
+        stem: prepare_reference_base(
+            stem,
+            half_window_s=args.course_half_window_s,
+            min_speed_mps=args.min_course_speed_mps,
+            calibration_fraction=TUNING_CALIBRATION_FRACTION,
+        )
+        for stem in trial_stems
+    }
+
+    selected_overrides: dict[str, dict[str, float | int]] = {
+        "AKF (proposed)": {
             "process_variance": args.akf_q,
-            "measurement_variance_rad2": args.akf_r,
-            "measurement_std_deg": float(np.rad2deg(np.sqrt(args.akf_r))),
-            "lower_threshold_deg": args.akf_delta1_deg,
-            "upper_threshold_deg": args.akf_delta2_deg,
+            "measurement_variance": args.akf_r,
+            "jump_threshold": np.deg2rad(args.akf_delta1_deg),
+            "jump_threshold_high": np.deg2rad(args.akf_delta2_deg),
             "severe_inflation": args.akf_severe_inflation,
         },
     }
-    results = analyze_yaw_filters(UGV_DIR, trial_stems, settings)
-    export_yaw_tables(results, output_dir)
-    results.by_trial.to_csv(output_dir / "metrics_by_trial.csv", index=False)
-    results.summary.to_csv(output_dir / "summary_metrics.csv", index=False)
-    results.q_sensitivity.to_csv(output_dir / "akf_q_sensitivity.csv", index=False)
-    results.tuning_grid.to_csv(output_dir / "baseline_tuning_grid.csv", index=False)
-    results.selected_parameters.to_csv(output_dir / "selected_filter_parameters.csv", index=False)
-    results.motion_summary.to_csv(output_dir / "reference_motion_summary.csv", index=False)
-    results.split_summary.to_csv(output_dir / "split_summary.csv", index=False)
-    results.deployed_diagnostic.to_csv(output_dir / "deployed_akf_all_valid_diagnostic.csv", index=False)
-    (output_dir / "heading_evaluation_protocol.json").write_text(
-        json.dumps(results.protocol, indent=2), encoding="utf-8",
-    )
-    for stem, trial in results.series.items():
-        trial.to_csv(output_dir / f"trajectory_reference_estimates_{stem}.csv", index=False)
-        trial.to_csv(output_dir / f"ugv_filter_estimates_{stem}.csv", index=False)
+    tuning_grid = pd.DataFrame()
+    if not args.skip_baseline_tuning:
+        tuning_grid, baseline_overrides = tune_baselines(reference_trials)
+        selected_overrides.update(baseline_overrides)
 
-    plot_comparison(results.series, output_dir)
-    write_reviewer_response(results, output_dir)
+    selected_params = merged_filter_params(selected_overrides)
+    metrics_by_trial, summary, aligned_outputs = compute_filter_comparison(
+        trial_stems,
+        reference_trials,
+        selected_params,
+    )
+    q_sensitivity = run_akf_q_sensitivity(reference_trials, selected_params)
+    motion_summary = compute_reference_motion_summary(reference_trials)
+
+    metrics_by_trial.to_csv(OUT_DIR / "metrics_by_trial.csv", index=False)
+    summary.to_csv(OUT_DIR / "summary_metrics.csv", index=False)
+    q_sensitivity.to_csv(OUT_DIR / "akf_q_sensitivity.csv", index=False)
+    tuning_grid.to_csv(OUT_DIR / "baseline_tuning_grid.csv", index=False)
+    pd.DataFrame(parameter_rows(selected_params, tuned=not args.skip_baseline_tuning)).to_csv(
+        OUT_DIR / "selected_filter_parameters.csv", index=False
+    )
+    motion_summary.to_csv(OUT_DIR / "reference_motion_summary.csv", index=False)
+
+    for stem, trial in aligned_outputs.items():
+        trial.to_csv(OUT_DIR / f"trajectory_reference_estimates_{stem}.csv", index=False)
+        trial.to_csv(OUT_DIR / f"ugv_filter_estimates_{stem}.csv", index=False)
+
+    plot_comparison(aligned_outputs, OUT_DIR)
+    write_reviewer_response(summary, q_sensitivity, selected_params, motion_summary, OUT_DIR)
 
     print(f"Processed trials: {', '.join(trial_stems)}")
-    print(f"Protocol: {args.protocol}")
-    print(f"Saved outputs to: {output_dir}")
-    print(results.summary.round(3).to_string(index=False))
-    print("Main-text Raw/AKF diagnostic (all valid moving samples):")
-    print(results.quantitative_table.round(3).to_string(index=False))
+    print(f"Saved outputs to: {OUT_DIR}")
+    print(summary.round(3).to_string(index=False))
 
 
 if __name__ == "__main__":

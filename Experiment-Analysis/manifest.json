@@ -2,28 +2,26 @@
   "schema_version": 1,
   "paper": {
     "title": "Real-Time Air-Ground Cooperative Control with Onboard UAV Computation and Dual-Mode Communication",
-    "paper_revision": "IOTJ_R2_current_main_tex",
-    "tables": ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII", "XIII", "XIV"],
-    "figures": ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"],
-    "reproducible_tables": ["II", "IV", "V", "VI", "VII", "IX", "X", "XI", "XII", "XIV"],
-    "reproducible_figures": ["5", "6", "7", "8", "10", "11", "12", "13", "14", "15"]
+    "paper_revision": "IOTJ_20260624_1429",
+    "tables": ["I", "II", "III", "IV", "VII"],
+    "figures": ["5", "6", "7", "8", "9", "10", "11", "12", "13"]
   },
   "analysis": {
     "timeout_threshold_s": 0.3,
     "nominal_slot_s": 0.1,
     "leading_distance_m": 10.0,
-    "table_ii_speed_half_window_s": 1.0,
+    "table_i_speed_half_window_s": 1.0,
     "outer_loop_window_s": [200.0, 320.0],
     "delay_window_s": [128.4, 540.0],
-    "table_v_communication_window_s": [148.0, 540.0],
-    "figure_11_gap_threshold_s": 1.0,
-    "supplementary_communication_error_window_s": [100.0, 540.0],
+    "table_iii_communication_window_s": [148.0, 540.0],
+    "figure_10_gap_threshold_s": 1.0,
+    "figure_11_window_s": [100.0, 540.0],
     "delay_values_s": [0.0, 0.1, 0.2, 0.3, 0.5],
     "outer_loop_lambda_x_s_inv": 0.804,
     "outer_loop_lambda_y_s_inv": 0.613
   },
   "trials": {
-    "table_ii": [
+    "table_i": [
       {"label": "Trial 1", "file": "data/trials/controller/uav_202411011105.csv", "speed_file": "data/heading/202410211227.csv"},
       {"label": "Trial 2", "file": "data/trials/controller/uav_202411011223.csv", "speed_file": "data/heading/202410211256.csv"},
       {"label": "Trial 3", "file": "data/trials/controller/uav_202411041454.csv", "speed_file": "data/heading/202410211327.csv"},
@@ -36,16 +34,10 @@
     "communication_4g": "data/trials/controller/uav_202410291603.csv",
     "communication_5g": "data/trials/controller/uav_202411041454.csv",
     "communication_metrics": "data/communication/control_aligned_positions_202411041454.csv",
-    "closed_loop_modes": {
-      "5G-only": "data/closed_loop/5G-only_test.csv",
-      "LoRa-only": "data/closed_loop/LoRa-only_test.csv",
-      "Dual-mode": "data/closed_loop/dual-mode_test.csv"
-    },
-    "closed_loop_route": "data/closed_loop/route_geometry_500m.csv",
-    "figure_10_update_streams": "data/communication/accepted_link_updates_202410291603_202411041454.csv",
-    "figure_11_5g_positions": "data/communication/gv_5g_position_updates_202411041454.csv",
-    "figure_11_lora_positions": "data/communication/gv_lora_position_updates_202411041454.csv",
-    "supplementary_communication_errors": "data/communication/tracking_errors_202411041454.csv",
+    "figure_9_update_streams": "data/communication/accepted_link_updates_202410291603_202411041454.csv",
+    "figure_10_5g_positions": "data/communication/gv_5g_position_updates_202411041454.csv",
+    "figure_10_lora_positions": "data/communication/gv_lora_position_updates_202411041454.csv",
+    "figure_11_errors": "data/communication/tracking_errors_202411041454.csv",
     "heading_stems": [
       "202410211227",
       "202410211256",
@@ -54,7 +46,6 @@
     ]
   },
   "heading_filter": {
-    "evaluation_protocol": "held-out",
     "course_reference": {
       "half_window_s": 1.0,
       "min_speed_mps": 0.5,
@@ -72,18 +63,17 @@
   },
   "notes": {
     "planar_error_units": "All planar tracking errors are computed directly from the released metre-valued coordinates. No legacy plotting scale is applied.",
-    "table_ii_speed_policy": "Table II GV speed statistics use the four canonical RTK trajectory CSVs under data/heading. At each interior sample, x and y are linearly interpolated 1.0 s before and after the sample time; displacement is divided by 2.0 s and converted from m/s to km/h. Mean and P95 are computed over the resulting valid interior samples.",
+    "table_i_speed_policy": "Table I GV speed statistics use the four canonical RTK trajectory CSVs under data/heading. At each interior sample, x and y are linearly interpolated 1.0 s before and after the sample time; displacement is divided by 2.0 s and converted from m/s to km/h. Mean and P95 are computed over the resulting valid interior samples.",
     "timestamp_policy": "Realtime UAV and UGV state timestamps are aligned causally using the latest UGV state with state_time <= UAV time. Wall-clock timestamps are reconstructed relative to the first valid log line and retained in intermediate CSV files.",
     "figure_5": "The archived analysis used an online Esri satellite basemap. The released script generates the same trajectory and markers offline without requiring network access; the basemap is intentionally not fetched during reproduction.",
-    "state_age_envelope": "Table IV is an analytical conservative bound, not an empirical statistic. It uses a_max = 5 / (v_GV + D * omega_GV), with a 5 m planar tolerance, D = 10 m, speed converted to m/s, and yaw rate converted to rad/s.",
-    "heading_ground_truth": "Tables VII and XII evaluate raw GV yaw and filter outputs against an independent RTK-derived course-angle reference. The reference is reconstructed from each UGV CSV x/y trajectory over a centered 1.0 s half-window, and metrics use only samples whose reconstructed speed is at least 0.5 m/s.",
-    "heading_tuning_policy": "Default held-out protocol: tune EKF, EKF-AR, and Huber-based KF on the first floor(0.35*N_valid) chronological valid samples of each trial, selecting one set per baseline by pooled calibration RMSE (ties: MAE, P95, candidate order). AKF retains the previously fixed deployment settings and is not tuned. All methods are scored only on the remaining valid samples. Filters retain causal state across the split. Explicit legacy-paper mode reproduces the historical timestamp-quantile calibration and all-valid evaluation with overlap, only for the Comment 3.5 audit. Exported heading_evaluation_protocol.json identifies the active protocol and counts.",
-    "communication_replay_policy": "Table V uses data/communication/control_aligned_positions_202411041454.csv, a control-aligned GV position stream. Rows are selected in the requested 148--540 s window; the released stream starts at 149.1 s in that window. Mean, P95, and maximum update intervals are computed from distinct per-link sensing timestamps. Dual-mode uses the newer of the 5G and LoRa sensing timestamps. The timeout rate follows manuscript Eq. (14): for each distinct-update gap, floor(max(0, gap - tau) / Ts) missed slots are summed and divided by floor(Tmission / Ts), with tau = 0.3 s, Ts = 0.1 s, and Tmission equal to the requested analysis-window duration. A control-source switch is counted only when the policy changes between 5G and LoRa; LoRa is selected only while 5G is stale and LoRa has a newer sensing timestamp. LoRa fallback duration counts those 0.1 s control rows.",
-    "figure_10_policy": "Figure 10 uses controller-accepted cellular and LoRa position/yaw updates from the original 4G and 5G trials. LoRa points represent successful fallback updates, not every received LoRa packet.",
-    "figure_11_policy": "Figure 11 uses the complete deduplicated 5G and LoRa position streams from the 5G trial. The first received update after a state-update gap strictly greater than 1.0 s is marked as a loss recovery point.",
-    "supplementary_communication_error_policy": "The supplementary communication-error diagnostic uses the corrected causal reconstruction from the 5G trial over the displayed 100--540 s window. The 5G-only and LoRa-only errors include the 10 m forward-lead target and link-specific yaw; the proposed curve is the controller's logged delta_x/delta_y error.",
-    "closed_loop_mode_policy": "The closed-loop mode summary and the uav_gv_trajectories/xy_error_comparison figures use three separately recorded flights. Metrics use only rows with terminated = 0. The LoRa-only terminal row records the supervisory timeout and is excluded from active-flight metrics but marked in the figures. Dual-mode LoRa fallback duration is the time spent on active intervals where LoRa is selected and the cellular state age exceeds 0.3 s.",
+    "state_age_envelope": "Table II is an analytical conservative bound, not an empirical statistic. It uses a_max = 5 / (v_GV + D * omega_GV), with a 5 m planar tolerance, D = 10 m, speed converted to m/s, and yaw rate converted to rad/s.",
+    "heading_ground_truth": "Table IV evaluates raw GV yaw and all filter outputs against an independent RTK-derived course-angle reference. The reference is reconstructed from each UGV CSV x/y trajectory over a centered 1.0 s half-window, and metrics use only samples whose reconstructed speed is at least 0.5 m/s.",
+    "heading_tuning_policy": "EKF, EKF-AR, and Huber-based KF are selected by grid search on the first 35% of valid RTK-course samples from each trial. The proposed AKF parameters are fixed before the baseline search, and the full grid and selected parameters are exported for audit.",
+    "communication_replay_policy": "Table III uses data/communication/control_aligned_positions_202411041454.csv, a control-aligned GV position stream. Rows are selected in the requested 148--540 s window; the released stream starts at 149.1 s in that window. Mean, P95, and maximum update intervals are computed from distinct per-link sensing timestamps. Dual-mode uses the newer of the 5G and LoRa sensing timestamps. The timeout rate follows manuscript Eq. (14): for each distinct-update gap, floor(max(0, gap - tau) / Ts) missed slots are summed and divided by floor(Tmission / Ts), with tau = 0.3 s, Ts = 0.1 s, and Tmission equal to the requested analysis-window duration. A control-source switch is counted only when the policy changes between 5G and LoRa; LoRa is selected only while 5G is stale and LoRa has a newer sensing timestamp. LoRa fallback duration counts those 0.1 s control rows.",
+    "figure_9_policy": "Figure 9 uses controller-accepted cellular and LoRa position/yaw updates from the original 4G and 5G trials. LoRa points represent successful fallback updates, not every received LoRa packet.",
+    "figure_10_policy": "Figure 10 uses the complete deduplicated 5G and LoRa position streams from the 5G trial. The first received update after a state-update gap strictly greater than 1.0 s is marked as a loss recovery point.",
+    "figure_11_policy": "Figure 11 uses the corrected causal reconstruction from the 5G trial over the displayed 100--540 s window. The 5G-only and LoRa-only errors include the 10 m forward-lead target and link-specific yaw; the proposed curve is the controller's logged delta_x/delta_y error.",
     "data_release": "The original high-volume controller and UAV application logs are retained in a private archive and are not included in the public artifact because their combined size is approximately 111 MB and they contain repeated diagnostic and transport lines. The public CSV extraction retains every field consumed by the analysis project. extract_data.py records the deterministic extraction procedure for authorized archive holders.",
-    "platoon_simulation": "Table XIV and Figure 15 use the deterministic leader-only platoon escort simulation in agcs_analysis/platoon_simulation.py with 0.2 s relay delay, 10% packet loss, 0.1 s transmissions, and fixed random seed 70061. The complete parameters and generated time series are exported with the results."
+    "platoon_simulation": "Table VII and Figure 13 use the deterministic leader-only platoon escort simulation in agcs_analysis/platoon_simulation.py with 0.2 s relay delay, 10% packet loss, 0.1 s transmissions, and fixed random seed 70061. The complete parameters and generated time series are exported with the results."
   }
 }

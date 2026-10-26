@@ -23,16 +23,16 @@ def run(
     settings = dataset.settings
     tracking_summary, tracking_details = summarize_tracking_trials(
         dataset.tracking_trials(),
-        speed_half_window_s=settings["table_ii_speed_half_window_s"],
+        speed_half_window_s=settings["table_i_speed_half_window_s"],
     )
-    export_table(tracking_summary, "table_II_repeated_trial_metrics", outputs.tables)
-    export_table(state_age_envelope(), "table_IV_operational_envelope", outputs.tables)
+    export_table(tracking_summary, "table_I", outputs.tables)
+    export_table(state_age_envelope(), "table_II", outputs.tables)
     tracking_details.to_csv(
         outputs.intermediate / "tracking_trial_metrics.csv", index=False
     )
 
     # The outer-loop and delay analyses require the full controller record;
-    # Table V uses a separate control-aligned communication CSV.
+    # Table III uses a separate control-aligned communication CSV.
     communication_log = dataset.communication_5g()
     outer_loop = reconstruct_outer_loop(
         communication_log, settings["leading_distance_m"]
@@ -85,8 +85,8 @@ def run(
     return FeatureResult(
         name="tracking",
         tables=[
-            "table_II_repeated_trial_metrics",
-            "table_IV_operational_envelope",
+            "table_I",
+            "table_II",
             "outer_loop_response_models",
             "delay_sensitivity",
         ],

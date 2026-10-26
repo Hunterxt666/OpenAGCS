@@ -39,7 +39,7 @@ The repository supports two distinct workflows:
 | Communication | [`Commulication-Framework`](Commulication-Framework/README.md) | Local/remote APIs, timestamped telemetry, adaptive heading filtering, cellular state, and LoRa transport |
 | Control | [`Vehicle-Controller`](Vehicle-Controller/README.md) | Dual-mode state supervision, safety state machine, Eq. (11) PD control, and absolute-yaw command generation |
 | Execution | [`UAV-Executor`](Vehicle-Controller/UAV-Executor/README.md) | DJI ground-frame command execution, command watchdog, emergency latch, and shortest-path absolute yaw |
-| Evaluation | [`Experiment-Analysis`](Experiment-Analysis/README.md) | Tracking, communication, separate closed-loop mode, heading, and platoon analysis aligned to the current R2 manuscript |
+| Evaluation | [`Experiment-Analysis`](Experiment-Analysis/README.md) | Tracking, communication, heading, and platoon analysis with Tables I--IV and VII and Figures 5--13 |
 
 The historical directory spelling `Commulication-Framework` is retained so
 that existing deployment scripts and source references remain valid.
@@ -75,8 +75,7 @@ python -m pip install -r requirements.txt
 ### 2. Reproduce all tables and figures
 
 ```bash
-cd Experiment-Analysis
-.\run_paper_reproduction.ps1 -Python python
+python -m agcs_analysis all --clean
 ```
 
 Generated artifacts are written to:
@@ -86,10 +85,8 @@ Generated artifacts are written to:
 - `Experiment-Analysis/output/intermediate/`
 - `Experiment-Analysis/output/analysis_summary.json`
 
-Use `.\run_paper_reproduction.ps1 -Python python -TablesOnly` when figure rendering is not
-required. This is the official paper-reproduction entry point; it validates the
-pinned Python 3.9 environment and applies the audited NumPy CPU-dispatch setting
-before importing the analysis stack.
+Use `python -m agcs_analysis all --clean --tables-only` when figure rendering is not
+required.
 
 ## Quick Start: Distributed Deployment
 
@@ -127,7 +124,7 @@ because they are high-volume and dominated by repeated diagnostic and transport
 records. `Experiment-Analysis/extract_data.py` documents the deterministic
 log-to-CSV extraction used for the released data.
 
-For Table V, the released controller CSVs preserve the same UGV state records
+For Table III, the released controller CSVs preserve the same UGV state records
 and timestamp field used in the paper's original calculation. The reproduction
 therefore uses the same data basis and interval calculation as the paper.
 
@@ -136,7 +133,7 @@ The analysis pipeline records all input mappings and numerical parameters in
 causal alignments, communication modes, response fits, filter outputs, and
 plotting series under `output/intermediate/`.
 
-Table II speed statistics are reproduced from
+Table I speed statistics are reproduced from
 `Experiment-Analysis/data/heading/*.csv` using centered linear
 interpolation at 1.0 s before and after each valid sample. The resulting planar
 displacement is divided by 2.0 s and converted to km/h before computing the
@@ -144,14 +141,9 @@ mean and P95.
 
 The analysis project provides three independently runnable features:
 
-- `tracking`: Tables II and IV, and Figures 5--8;
-- `communication`: Table V and Figures 10--11;
-- `closed_loop`: Table VI and Figures 12--13;
-- `heading`: Tables VII, IX--XII and Figure 14;
-- `platoon`: Table XIV and Figure 15.
-
-The R2 manuscript-to-artifact inventory, including intentionally non-generated
-figures, is maintained in [REPRODUCIBILITY_AUDIT_R2.md](REPRODUCIBILITY_AUDIT_R2.md).
+- `tracking`: Tables I--II, auxiliary response/delay tables, and Figures 5--8;
+- `communication`: Table III and Figures 9--11;
+- `heading`: RTK-course-referenced Table IV and Figure 12.
 
 See the [Experiment Analysis project guide](Experiment-Analysis/README.md) for
 the feature commands, data contracts, output layout, and numerical methods.
@@ -163,7 +155,7 @@ the feature commands, data contracts, output layout, and numerical methods.
 - The DJI executor overlay source is public. DJI PSDK, aircraft-specific
   credentials, and the linked executable are not redistributed because they
   require separate DJI authorization and platform-specific deployment.
-- Table VII evaluates raw GV yaw and the deployed AKF against an independent
+- Table IV evaluates raw GV yaw and every filter output against an independent
   RTK-derived course angle during valid moving segments. The reference and
   metrics use only `Experiment-Analysis/data/heading/*.csv`.
 - Figure 5 is reproduced offline without the network-fetched Esri basemap used
